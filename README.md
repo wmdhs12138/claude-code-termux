@@ -14,7 +14,7 @@
 | 底座 | Bun 1.4.3-canary.1+a749e0a9b（官方 Android bionic 构建） |
 | 产物 | `dist/claude`，220,333,962 B，sha256 `ade71ad8…` |
 | 验证设备 | Android 16 / aarch64 |
-| 已验证 | 对话往返（DeepSeek 端点）、Bash / Read / Grep / find 工具、TUI、`/exit` 干净退出 |
+| 已验证 | 对话往返、Bash / Read / Grep / find 工具、TUI、`/exit` 干净退出 |
 
 ## 原理
 
@@ -73,28 +73,17 @@ claude update --force  # 强制重建
 > `claude update` 由 launcher 拦截：官方自更新会下载 glibc 版覆盖原生产物，这里改为
 > 用最新官方二进制在本地重新走一遍提取/适配/嫁接管线。等价于 `make build VERSION=latest`。
 
-### 使用 Anthropic 官方账号
+### 账号与模型
 
-launcher 只在检测不到 `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` 时才套用 DeepSeek 配置；
-直接 `claude` 走正常登录流程即可。
-
-### 使用 DeepSeek（默认）
-
-把 key 写入 `~/.config/claude-code/deepseek.key`（一行纯文本），launcher 会自动：
-
-```
-ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
-ANTHROPIC_MODEL=deepseek-flash（可用 CLAUDE_DS_MODEL 覆盖）
-```
+launcher **不设置任何账号、模型或端点配置**：登录、模型选择、API 端点全部沿用 Claude Code
+官方默认行为（`claude` 后按提示登录即可）。需要自定义时，自行导出 `ANTHROPIC_*` 环境变量。
 
 ## 环境变量（launcher 已处理）
 
 | 变量 | 作用 |
 |---|---|
 | `USE_BUILTIN_RIPGREP=0` | **必需**：内嵌 ripgrep 是 Linux 二进制，强制用系统 `rg` |
-| `DISABLE_AUTOUPDATER=1` | **必需**：防止自动更新拉 glibc 版覆盖原生产物 |
-| `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` | 关非必要流量 |
-| `CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1` | 静默第三方模型目录警告 |
+| `DISABLE_AUTOUPDATER=1` | **必需**：防止官方自更新拉 glibc 版覆盖原生产物（`claude update` 已改为本地重建） |
 
 ## 仓库结构
 
