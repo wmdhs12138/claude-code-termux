@@ -52,7 +52,7 @@ shell 函数，把调用重定向回 CLI 二进制（以 `bfs`/`ugrep` 身份）
 `pkg install python3 unzip curl ripgrep`。
 
 ```bash
-git clone <this-repo> ~/claude-termux
+git clone https://github.com/wmdhs12138/claude-termux.git ~/claude-termux
 cd ~/claude-termux
 make build          # 下载官方二进制 + 校验 + 提取 + 嫁接 + 自检
 make install        # 安装命令到 ~/bin/claude
