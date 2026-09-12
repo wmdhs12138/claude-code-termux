@@ -27,7 +27,19 @@ if [ ! -x "$BUN" ]; then
   unzip -o -j "$WORK/bun-android.zip" "*/bun" -d "$WORK/bun-android" >/dev/null
   chmod +x "$BUN"
 fi
-BUN_VER="$("$BUN" --revision 2>/dev/null || "$BUN" --version)"
+if [ "${SKIP_RUN:-0}" = "1" ]; then
+  # x64 CI: cannot execute the aarch64 base, read the version string instead.
+  BUN_VER="$(python3 - "$BUN" <<'PY'
+import re, sys
+d = open(sys.argv[1], 'rb').read()
+pat = rb'(?:bun-v|Bun v)(\d+\.\d+\.\d+(?:-canary[^\s"\\]*)?)'
+m = re.search(pat, d)
+print(m.group(1).decode() if m else 'unknown')
+PY
+)"
+else
+  BUN_VER="$("$BUN" --revision 2>/dev/null || "$BUN" --version)"
+fi
 
 # 3. extract the standalone module graph ([u64 len][graph][Offsets32][trailer])
 GRAPH="$WORK/claude-graph.bin"
