@@ -24,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build (x64 runner: structure check only, no execution)
+      - name: Build and verify (no execution on x64)
         env:
           SKIP_RUN: "1"
         run: make build VERSION=latest
