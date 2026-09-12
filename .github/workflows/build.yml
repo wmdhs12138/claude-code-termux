@@ -1,0 +1,45 @@
+name: build
+
+# Toolchain CI: builds the grafted bionic ELF and verifies the pipeline.
+# Deliberately does NOT publish or upload the binary: it is a modified copy
+# of Anthropic's proprietary Claude Code and must not be redistributed.
+# Only build reports (hashes / offsets) are uploaded.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build (x64 runner: structure check only, no execution)
+        env:
+          SKIP_RUN: "1"
+        run: make build VERSION=latest
+
+      - name: Show build manifest
+        run: cat dist/build-manifest.json
+
+      - name: Upload manifest and reports (no binary)
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-manifest-${{ github.run_id }}
+          path: |
+            dist/build-manifest.json
+            work/extract-report.json
+            work/adapt-report.log
+            work/revive-report.log
+          retention-days: 7
+          if-no-files-found: error

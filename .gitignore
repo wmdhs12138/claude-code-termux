@@ -1,0 +1,8 @@
+work/
+ref/
+dist/
+evidence/*.log
+*.bin
+*.zip
+*.log
+__pycache__/

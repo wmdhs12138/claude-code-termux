@@ -1,0 +1,15 @@
+{
+  "claude": "2.1.269",
+  "output_version": "2.1.269 (Claude Code)",
+  "output_sha256": "ade71ad82ea805a387491946267414cfd7b63d06e616ca425f25a4fdb2204936",
+  "output_size": 220333962,
+  "graph_sha256": "650f2f22460a36b199541c09aae3609b096092a9dcc1e26b784ead8797d12a07",
+  "adaptations": [
+    "search_shadow"
+  ],
+  "base_bun": {
+    "version": "1.4.3-canary.1+a749e0a9b",
+    "binary_sha256": "4c6a717da4dc1214ae008c76927e92e4bb18e5a7bdfcae2ba3fd0835cd1bb7e4"
+  },
+  "built_at": "2026-09-12T09:07:18+00:00"
+}
