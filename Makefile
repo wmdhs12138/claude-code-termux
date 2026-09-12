@@ -6,10 +6,13 @@ endif
 ROOT  := $(CURDIR)
 VERSION ?= latest
 
-.PHONY: build fetch verify smoke install uninstall clean
+.PHONY: build update fetch verify smoke install uninstall clean
 
 build:
 	bash scripts/build.sh $(VERSION)
+
+update:
+	bash scripts/update.sh
 
 fetch:
 	bash scripts/fetch-claude.sh $(VERSION)

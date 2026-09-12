@@ -4,6 +4,16 @@
 set -euo pipefail
 
 ROOT="${CLAUDE_TERMUX_ROOT:-@ROOT@}"
+
+# `claude update` is intercepted: the official self-updater would replace this
+# bionic build with a glibc binary. Rebuild from the latest release instead.
+case "${1:-}" in
+  update|upgrade)
+    shift
+    exec bash "$ROOT/scripts/update.sh" "$@"
+    ;;
+esac
+
 BIN="${CLAUDE_TERMUX_BIN:-$ROOT/dist/claude}"
 if [ ! -x "$BIN" ]; then
   echo "claude: binary not found at $BIN (run 'make build' in $ROOT)" >&2

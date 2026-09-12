@@ -62,11 +62,16 @@ claude              # TUI
 > 如果 `~/bin/claude` 已存在（例如旧的 npm 版 2.1.112 启动器），`make install` 会覆盖它，
 > 先自行备份：`mv ~/bin/claude ~/bin/claude-legacy`。
 
-更新到最新版：
+更新：
 
 ```bash
-make build VERSION=latest    # 或 make build VERSION=2.1.270
+claude update          # 检查并重建到最新版
+claude update --check  # 只检查（有更新时退出码 1）
+claude update --force  # 强制重建
 ```
+
+> `claude update` 由 launcher 拦截：官方自更新会下载 glibc 版覆盖原生产物，这里改为
+> 用最新官方二进制在本地重新走一遍提取/适配/嫁接管线。等价于 `make build VERSION=latest`。
 
 ### 使用 Anthropic 官方账号
 
@@ -99,6 +104,7 @@ versions.json             版本与哈希锁定（Claude、底座 Bun、产物�
 scripts/
   fetch-claude.sh         下载官方 linux-arm64 二进制 + sha256 校验
   build.sh                全流程管线 + 构建指纹（dist/build-manifest.json）
+  update.sh               claude update 实现（检查/重建）
   launcher.sh             claude 启动器模板
 tools/
   extract_graph.py        .bun 节 → standalone 模块图
