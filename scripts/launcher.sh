@@ -20,13 +20,18 @@ if [ ! -x "$BIN" ]; then
   exit 1
 fi
 
+# Optional local overrides (account, model, endpoint, ...), kept out of the repo.
+# Default path: ~/.config/claude-code/env.sh ; override with $CLAUDE_TERMUX_ENV.
+ENV_FILE="${CLAUDE_TERMUX_ENV:-$HOME/.config/claude-code/env.sh}"
+if [ -r "$ENV_FILE" ]; then
+  # shellcheck disable=SC1090
+  . "$ENV_FILE"
+fi
+
 # Required on Termux: the embedded ripgrep is a linux/glibc binary; use system rg.
 export USE_BUILTIN_RIPGREP=0
 # Official self-update would fetch a glibc build and break the grafted runtime.
 # (`claude update` is intercepted above and rebuilds locally instead.)
 export DISABLE_AUTOUPDATER=1
-
-# Account, model and endpoint settings are intentionally untouched: use
-# Claude Code's official defaults, or export ANTHROPIC_* yourself.
 
 exec "$BIN" "$@"

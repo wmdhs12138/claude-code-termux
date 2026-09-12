@@ -76,7 +76,19 @@ claude update --force  # 强制重建
 ### 账号与模型
 
 launcher **不设置任何账号、模型或端点配置**：登录、模型选择、API 端点全部沿用 Claude Code
-官方默认行为（`claude` 后按提示登录即可）。需要自定义时，自行导出 `ANTHROPIC_*` 环境变量。
+官方默认行为（`claude` 后按提示登录即可）。
+
+需要自定义（例如第三方 Anthropic 兼容端点）时，写本地覆盖文件即可，不会进仓库、也不会被
+`claude update` 覆盖：
+
+```bash
+# ~/.config/claude-code/env.sh   （可用 $CLAUDE_TERMUX_ENV 换路径）
+export ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic"
+export ANTHROPIC_AUTH_TOKEN="sk-..."
+export ANTHROPIC_MODEL="deepseek-flash"
+```
+
+launcher 每次启动会 source 这个文件，然后 exec Claude Code。
 
 ## 环境变量（launcher 已处理）
 
