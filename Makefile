@@ -40,9 +40,11 @@ clean:
 	rm -f work/claude-graph.bin dist/claude
 
 # The same number CI puts in `toolchain-v<N>-<fingerprint>`: tracked files only,
-# so a stray __pycache__ cannot make it disagree with the published tag.
+# so a stray __pycache__ cannot make it disagree with the published tag. The set
+# below must match the workflow's TC_PATHS; if the two ever drift, this target
+# stops reproducing the published tag, which is how the drift gets noticed.
 fingerprint:
-	@git ls-files -z scripts tools | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-7
+	@git ls-files -z scripts tools .github | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-7
 
 # The base is a rolling canary tag, but work/ caches it, so a plain build never
 # notices that the tag moved. This drops the cache and rebuilds against the

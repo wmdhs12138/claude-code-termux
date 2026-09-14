@@ -104,12 +104,24 @@ WARNING，此时复现出的产物 sha256 可能与本 release 不同 —— 那
 """
 
 
-def toolchain_notes(toolchain, fingerprint, predecessor, changelog, released, versions_doc):
+def toolchain_notes(toolchain, fingerprint, predecessor, changelog, released,
+                    versions_doc, pending="", paths="scripts tools .github"):
     if predecessor and predecessor != "-":
-        scope = f"自上一个工具链版本 `{predecessor}` 以来，触及 `scripts/` 或 `tools/` 的提交："
+        scope = f"自上一个工具链版本 `{predecessor}` 以来，触及工具链文件的提交："
     else:
-        scope = "首个版本化工具链。此前 `scripts/` 与 `tools/` 的历史提交（最近 20 条）："
-    versions = released or "（尚无）"
+        scope = "首个版本化工具链。此前工具链文件的历史提交（最近 20 条）："
+    # This note is written before the Claude release of the same run exists as a
+    # tag (see --pending), so the released list is the tags we can see plus that
+    # version. Sorting here rather than trusting the caller's order keeps the
+    # merged list readable.
+    rel = [x for x in (released or "").split(",") if x]
+    if pending and pending not in rel:
+        rel.append(pending)
+    rel.sort(key=lambda s: [int(p) for p in s.split(".")])
+    versions = ", ".join(rel) or "（尚无）"
+    # Rendered from the same set the fingerprint hashes, so the note cannot
+    # claim coverage the hash does not have.
+    paths_label = " + ".join(f"`{p}/`" for p in paths.split())
     # Read from versions.json rather than hardcoding: the pinned base moves, and
     # a hand-typed "verified base" would go stale without anything noticing.
     base = (versions_doc.get("base_bun") or {}).get("version") or "?"
@@ -117,7 +129,7 @@ def toolchain_notes(toolchain, fingerprint, predecessor, changelog, released, ve
     base_note = f"（{vo.get('verified_on')} 实机验证：{vo.get('device')}）" if vo.get("verified_on") else ""
     return f"""# 工具链 {toolchain.split("-")[1]} (`{fingerprint}`)
 
-`scripts/` + `tools/` 全部文件内容的 sha256 前 7 位为 `{fingerprint}`，即本版本的工具链指纹。
+{paths_label} 全部文件内容的 sha256 前 7 位为 `{fingerprint}`，即本版本的工具链指纹。
 指纹变了就会自动切一个新 tag，因此这个编号不会和实际代码漂移。
 
 ## 能力
@@ -157,6 +169,11 @@ def main():
     t.add_argument("--predecessor", default="-")
     t.add_argument("--changelog", required=True)
     t.add_argument("--released", default="")
+    t.add_argument("--pending", default="",
+                   help="Claude version released by this same run; its tag is "
+                        "created after this note, so it is not in --released yet")
+    t.add_argument("--paths", default="scripts tools .github",
+                   help="the file set the fingerprint covers, as named in the note")
     t.add_argument("--versions", default="", help="versions.json, for the verified-base line")
 
     a = ap.parse_args()
@@ -170,7 +187,7 @@ def main():
             changelog = ""
         notes = toolchain_notes(
             a.toolchain, a.fingerprint, a.predecessor, changelog, a.released,
-            load(a.versions),
+            load(a.versions), pending=a.pending, paths=a.paths,
         )
 
     with open(a.out, "w") as f:

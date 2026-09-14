@@ -112,7 +112,12 @@ jobs:
           # (__pycache__ and friends), so the same commit would hash differently
           # on a machine that had run the tools. `make fingerprint` prints the
           # same number locally.
-          TC_FP="$(git ls-files -z scripts tools | sort -z \
+          #
+          # .github/ is in the set because it decides what a release *says*: a
+          # change to the note generator that stayed outside the fingerprint
+          # would ship with no tag recording it.
+          TC_PATHS="scripts tools .github"
+          TC_FP="$(git ls-files -z $TC_PATHS | sort -z \
                     | xargs -0 sha256sum | sha256sum | cut -c1-7)"
           echo "fingerprint: $TC_FP"
 
@@ -128,16 +133,24 @@ jobs:
             TC_TAG="toolchain-v$N-$TC_FP"
 
             if [ "$PREV" != "-" ]; then
-              git log --oneline --no-decorate "$PREV..HEAD" -- scripts tools > changelog.txt
+              git log --oneline --no-decorate "$PREV..HEAD" -- $TC_PATHS > changelog.txt
             else
-              git log --oneline --no-decorate -20 -- scripts tools > changelog.txt
+              git log --oneline --no-decorate -20 -- $TC_PATHS > changelog.txt
             fi
             RELEASED="$(git tag -l 'v*' \
                         | sed -n 's|^v\([0-9][0-9.]*\)$|\1|p' | sort -V | paste -sd, -)"
 
+            # This tag is cut before the Claude release of the same run (that note
+            # needs it), and `gh release create` publishes its tag through the API,
+            # so this checkout never learns about it: without --pending the list
+            # below would be missing the version released seconds later.
+            PENDING=""
+            if [ "$UNRELEASED" = "true" ]; then PENDING="$VERSION"; fi
+
             python3 .github/release_notes.py toolchain tc-notes.md \
               --toolchain "$TC_TAG" --fingerprint "$TC_FP" \
               --predecessor "$PREV" --changelog changelog.txt --released "$RELEASED" \
+              --pending "$PENDING" --paths "$TC_PATHS" \
               --versions versions.json
 
             gh release create "$TC_TAG" --title "工具链 v$N ($TC_FP)" \

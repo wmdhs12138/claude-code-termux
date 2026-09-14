@@ -98,9 +98,10 @@ aarch64 产物，这是唯一能自动把关的地方；实机验证仍靠 `make
 | tag | 触发 | 内容 |
 |---|---|---|
 | `v<claude 版本>` | 官方 `latest` 变了 | 官方校验和、产物/图 sha256、底座 Bun 哈希、复现命令 + 文本报告 |
-| `toolchain-v<N>-<指纹>` | `scripts/` + `tools/` 内容变了 | 工具链能力、格式兼容范围、变更列表 |
+| `toolchain-v<N>-<指纹>` | `scripts/` + `tools/` + `.github/` 内容变了 | 工具链能力、格式兼容范围、变更列表 |
 
-指纹是 `scripts/` + `tools/` 全部内容的 sha256 前 7 位，直接写进 tag，所以编号不会与代码漂移。
+指纹是 `scripts/` + `tools/` + `.github/`（含发布 note 的生成器）全部内容的 sha256 前 7 位，
+直接写进 tag，所以编号不会与代码漂移；`make fingerprint` 本地可复算，应与 tag 后缀一致。
 release notes 区分 CI 结构校验（产物未被执行）与实机验证（见 `versions.json`）：两者 sha256 一致时
 说"可复现"，不一致时提示底座 canary 漂移。需要产物请自己 `make build`。
 
