@@ -9,6 +9,12 @@ set -euo pipefail
 # below -- including the launcher's own CLAUDE_CODE_TERMUX_ROOT / _BIN. Sourcing
 # it later would make those two silently ineffective when set there.
 ENV_FILE="${CLAUDE_CODE_TERMUX_ENV:-$HOME/.config/claude-code/env.sh}"
+# The default path may legitimately not exist. An explicitly-set one must, or a
+# typo would leave you silently running on a different config than you asked for.
+if [ -n "${CLAUDE_CODE_TERMUX_ENV:-}" ] && [ ! -r "$ENV_FILE" ]; then
+  echo "claude: CLAUDE_CODE_TERMUX_ENV=$ENV_FILE is not readable" >&2
+  exit 1
+fi
 if [ -r "$ENV_FILE" ]; then
   # The file is user configuration, written in loose shell. Under `set -u` a
   # perfectly ordinary line like `export ANTHROPIC_AUTH_TOKEN="$TOKEN"` (with
