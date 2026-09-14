@@ -153,8 +153,12 @@ jobs:
               --pending "$PENDING" --paths "$TC_PATHS" \
               --versions versions.json
 
+            # --latest=false: a toolchain tag is not a newer version of the thing
+            # people come here for, and /releases/latest has to keep resolving to
+            # the Claude Code release. Without it GitHub marks the newest release
+            # as Latest, which for a same-run pair is this one.
             gh release create "$TC_TAG" --title "工具链 v$N ($TC_FP)" \
-              --notes-file tc-notes.md
+              --latest=false --notes-file tc-notes.md
             echo "released $TC_TAG"
           fi
 
