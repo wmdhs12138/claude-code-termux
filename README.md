@@ -101,7 +101,7 @@ launcher 每次启动会 source 这个文件，然后 exec Claude Code。
 
 ```
 Makefile                  build / fetch / verify / smoke / install
-versions.json             版本与哈希锁定（Claude、底座 Bun、产物）
+versions.json             版本与哈希锁定（Claude、底座 Bun、产物；构建后自动刷新）
 scripts/
   fetch-claude.sh         下载官方 linux-arm64 二进制 + sha256 校验
   build.sh                全流程管线 + 构建指纹（dist/build-manifest.json）
@@ -130,6 +130,15 @@ ELF/aarch64 结构校验（`SKIP_RUN=1`，runner 跑不了 bionic 产物），�
 ## 版本锁定与底座漂移
 
 `versions.json` 锁定 Claude 版本、官方二进制 sha256、底座 Bun revision 与产物 sha256。
+每次 `make build` / `claude update` 结束时会**自动刷新**它，不会落后于 `dist/build-manifest.json`。
+
+- `claude_linux_arm64_sha256`：官方 linux-arm64 二进制的 sha256（`fetch-claude.sh` 下载时已比对过官方 manifest）。
+- `verified_output.verified_on`：**本机执行过 `dist/claude --version` 且版本串匹配**的日期，
+  即 build.sh 第 5 步的校验。TUI、Bash/Read/Grep 工具、对话往返等更深的验证仍需手工做，
+  不会被自动写入。
+- CI 以 `SKIP_RUN=1` 构建时产物从未被执行，`device` / `verified_on` 写 `null`，
+  而不是沿用上一次的值。CI 只有 `contents: read`，不会污染已提交的记录。
+
 底座用的是 Bun **canary** 滚动 tag，若 `make build` 提示底座哈希漂移，说明 Bun 可能改了图格式，
 需要重新适配（本项目已验证 1.4.3-canary.1+a749e0a9b）。
 
@@ -137,7 +146,7 @@ ELF/aarch64 结构校验（`SKIP_RUN=1`，runner 跑不了 bionic 产物），�
 
 - 底座 canary 滚动，Bun 修改 graph 格式后需跟进适配。
 - 内嵌 ripgrep / 自动更新不可用（launcher 已用系统 `rg` 和禁用更新绕过）。
-- 产物 220 MB，未压缩；如需可自行 UPX。
+- 产物 225 MB，未压缩；如需可自行 UPX。
 - 未在 Android 8/9 以下、非 aarch64 设备验证。
 
 ## 法律

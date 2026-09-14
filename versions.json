@@ -12,7 +12,9 @@
     "sha256": "b48d789bbe7a4770ac05040afeb99d220b941fc562c77297cbab59a6fa8f3c01",
     "size": 224663024,
     "graph_sha256": "4ea5bfb9d873211444a2935b3926c30395d33a75750219e4cd00fd87e78c4bd3",
-    "adaptations": ["search_shadow"],
+    "adaptations": [
+      "search_shadow"
+    ],
     "device": "Android 16 / aarch64",
     "verified_on": "2026-09-14"
   }

@@ -104,4 +104,53 @@ json.dump({
 }, open(path, "w"), indent=2)
 print(path)
 PY
+# 7. refresh versions.json (the checked-in record) so it cannot drift behind
+#    dist/build-manifest.json. Build facts are always written; the device
+#    fields are written only when this build was actually executed here
+#    (SKIP_RUN=1 builds are never run, so they record null instead of
+#    leaving a stale device/date behind).
+CLAUDE_SHA="$(sha256sum "$CLAUDE_BIN" | cut -d' ' -f1)"
+DEVICE=""
+VERIFIED_ON=""
+if [ "${SKIP_RUN:-0}" != "1" ]; then
+  REL="$(getprop ro.build.version.release 2>/dev/null || true)"
+  ARCH="$(uname -m)"
+  if [ -n "$REL" ]; then DEVICE="Android $REL / $ARCH"; else DEVICE="$(uname -s) / $ARCH"; fi
+  VERIFIED_ON="$(date -u +%Y-%m-%d)"
+fi
+python3 - "$ROOT/versions.json" "$VER" "$CLAUDE_SHA" "$BUN_VER" "$BUN_SHA" \
+        "$OUT_SHA" "$OUT_SIZE" "$GRAPH_SHA" "$DEVICE" "$VERIFIED_ON" "$BUN_URL" <<'PY'
+import json, sys
+(path, ver, claude_sha, bun_ver, bun_sha,
+ out_sha, out_size, graph_sha, device, verified_on, bun_url) = sys.argv[1:12]
+try:
+    doc = json.load(open(path))
+except (OSError, ValueError):
+    doc = {}
+doc["claude"] = ver
+doc["claude_linux_arm64_sha256"] = claude_sha
+bun = doc.setdefault("base_bun", {})
+bun["version"] = bun_ver
+bun["binary_sha256"] = bun_sha
+bun.setdefault("url", bun_url)
+bun.setdefault("note", "rolling canary tag; if the extracted binary hash drifts, the graph format may have changed")
+doc["verified_output"] = {
+    "file": "dist/claude",
+    "sha256": out_sha,
+    "size": int(out_size),
+    "graph_sha256": graph_sha,
+    "adaptations": ["search_shadow"],
+    # verified_on = the built binary was executed here and reported the
+    # expected version (build.sh step 5). Deeper checks (TUI, tools) stay manual.
+    "device": device or None,
+    "verified_on": verified_on or None,
+}
+with open(path, "w") as f:
+    json.dump(doc, f, indent=2)
+    f.write("\n")
+print("build: versions.json refreshed" + (
+    f" (executed on {device}, {verified_on})" if device else " (device fields null: SKIP_RUN)"), file=sys.stderr)
+PY
+# keep the per-build fingerprint in evidence/ current (docs/format.md §6)
+cp -f "$DIST/build-manifest.json" "$ROOT/evidence/build-manifest.json"
 echo "build: OK claude=$OUT_VER base-bun=$BUN_VER -> $DIST/claude"
