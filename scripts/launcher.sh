@@ -3,7 +3,7 @@
 # Installed by `make install`; @ROOT@ is replaced with the project path.
 set -euo pipefail
 
-ROOT="${CLAUDE_TERMUX_ROOT:-@ROOT@}"
+ROOT="${CLAUDE_CODE_TERMUX_ROOT:-@ROOT@}"
 
 # `claude update` is intercepted: the official self-updater would replace this
 # bionic build with a glibc binary. Rebuild from the latest release instead.
@@ -14,15 +14,15 @@ case "${1:-}" in
     ;;
 esac
 
-BIN="${CLAUDE_TERMUX_BIN:-$ROOT/dist/claude}"
+BIN="${CLAUDE_CODE_TERMUX_BIN:-$ROOT/dist/claude}"
 if [ ! -x "$BIN" ]; then
   echo "claude: binary not found at $BIN (run 'make build' in $ROOT)" >&2
   exit 1
 fi
 
 # Optional local overrides (account, model, endpoint, ...), kept out of the repo.
-# Default path: ~/.config/claude-code/env.sh ; override with $CLAUDE_TERMUX_ENV.
-ENV_FILE="${CLAUDE_TERMUX_ENV:-$HOME/.config/claude-code/env.sh}"
+# Default path: ~/.config/claude-code/env.sh ; override with $CLAUDE_CODE_TERMUX_ENV.
+ENV_FILE="${CLAUDE_CODE_TERMUX_ENV:-$HOME/.config/claude-code/env.sh}"
 if [ -r "$ENV_FILE" ]; then
   # shellcheck disable=SC1090
   . "$ENV_FILE"

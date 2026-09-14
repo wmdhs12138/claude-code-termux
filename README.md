@@ -61,7 +61,7 @@ launcher 不设置任何账号、模型或端点，全部沿用官方默认。�
 （不进仓库，也不会被 `claude update` 覆盖）：
 
 ```bash
-# ~/.config/claude-code/env.sh   （可用 $CLAUDE_TERMUX_ENV 换路径）
+# ~/.config/claude-code/env.sh   （可用 $CLAUDE_CODE_TERMUX_ENV 换路径）
 export ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic"
 export ANTHROPIC_AUTH_TOKEN="sk-..."
 export ANTHROPIC_MODEL="deepseek-flash"

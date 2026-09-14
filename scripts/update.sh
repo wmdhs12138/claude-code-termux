@@ -8,8 +8,8 @@
 #   claude update --force    # rebuild even if already up to date
 set -euo pipefail
 
-ROOT="${CLAUDE_TERMUX_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
-BIN="${CLAUDE_TERMUX_BIN:-$ROOT/dist/claude}"
+ROOT="${CLAUDE_CODE_TERMUX_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+BIN="${CLAUDE_CODE_TERMUX_BIN:-$ROOT/dist/claude}"
 LATEST_URL="https://downloads.claude.ai/claude-code-releases/latest"
 
 CHECK_ONLY=0
