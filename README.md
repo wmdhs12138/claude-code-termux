@@ -8,13 +8,15 @@
 
 ## 状态
 
-| 项 | 值 |
-|---|---|
-| Claude Code | 2.1.270 |
-| 底座 | Bun 1.4.3-canary.1+a749e0a9b（官方 Android bionic 构建） |
-| 产物 | `dist/claude`，224,663,024 B，sha256 `b48d789b…` |
-| 验证设备 | Android 16 / aarch64 |
-| 已验证 | 对话往返、Bash / Read / Grep / find 工具、TUI、`/exit` 干净退出 |
+[![Claude Code](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fwmdhs12138%2Fclaude-termux%2Fmain%2Fversions.json&query=%24.claude&label=Claude%20Code&color=blue)](https://github.com/wmdhs12138/claude-termux/releases)
+[![build](https://github.com/wmdhs12138/claude-termux/actions/workflows/build.yml/badge.svg)](https://github.com/wmdhs12138/claude-termux/actions/workflows/build.yml)
+
+产物是单个 bionic aarch64 ELF，零 glibc / 零 ptrace / 零 proot。已在 Android 16 实机验证：
+对话往返、Bash / Read / Grep / find 工具、TUI、`/exit` 干净退出。
+
+版本号徽章读的是 [`versions.json`](versions.json)，每次构建自动刷新，不会滞后。
+产物哈希、官方校验和与底座 Bun 哈希见 [Releases](https://github.com/wmdhs12138/claude-termux/releases)
+（release 只含构建凭证，不含二进制）。
 
 ## 原理
 
@@ -26,7 +28,7 @@
 downloads.claude.ai/…/linux-arm64/claude   (glibc, Bun 1.4.3)
         │  tools/extract_graph.py   定位 .bun 节，取 [u64 len][graph]
         ▼
-claude-graph.bin   (1864 modules, 136 MB, 含源码)
+claude-graph.bin   (~1864 modules, ~136 MB, 含源码)
         │  tools/revive_patch.py    BUN_COMPILED.size + PT_LOAD 手术
         ▼
 Android Bun canary (bionic ELF)  ──►  dist/claude   (单 ELF, 225 MB)
@@ -131,7 +133,7 @@ evidence/                 构建与验证日志
 - **`release`**（`contents: write`）：只下载上面那几个文本报告，发布两类 release。
 
 **Release 永远不含二进制。** 产物是 Anthropic 专有代码的修改副本，上传即分发。
-`release` job 有一道硬闸：任何超过 1 MiB 的 asset 直接报错退出（224 MB 的产物一放就炸）。
+`release` job 有一道硬闸：任何超过 1 MiB 的 asset 直接报错退出（225 MB 的产物一放就炸）。
 
 ### 两类 release
 
