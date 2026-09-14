@@ -11,18 +11,13 @@
 [![Claude Code](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fwmdhs12138%2Fclaude-termux%2Fmain%2Fversions.json&query=%24.claude&label=Claude%20Code&color=blue)](https://github.com/wmdhs12138/claude-termux/releases)
 [![build](https://github.com/wmdhs12138/claude-termux/actions/workflows/build.yml/badge.svg)](https://github.com/wmdhs12138/claude-termux/actions/workflows/build.yml)
 
-产物是单个 bionic aarch64 ELF，零 glibc / 零 ptrace / 零 proot。已在 Android 16 实机验证：
-对话往返、Bash / Read / Grep / find 工具、TUI、`/exit` 干净退出。
-
-版本号徽章读的是 [`versions.json`](versions.json)，每次构建自动刷新，不会滞后。
-产物哈希、官方校验和与底座 Bun 哈希见 [Releases](https://github.com/wmdhs12138/claude-termux/releases)
-（release 只含构建凭证，不含二进制）。
+已在 Android 16 / aarch64 实机验证：对话往返、Bash / Read / Grep / find、TUI、`/exit` 干净退出。
+产物哈希与校验和见 [Releases](https://github.com/wmdhs12138/claude-termux/releases)。
 
 ## 原理
 
-官方 Claude Code 是 Bun 编译的 **glibc** 单文件可执行程序，在 Termux（bionic）上无法直接运行。
-本项目不碰 glibc，也不做 ptrace 拦截，而是把官方二进制里内嵌的 **standalone 模块图**原样取出来，
-嫁接到官方 Android Bun 运行时上：
+官方 Claude Code 是 Bun 编译的 **glibc** 单文件程序，Termux（bionic）跑不了。本项目把官方二进制里
+内嵌的 **standalone 模块图**原样取出，嫁接到官方 Android Bun 运行时上：
 
 ```
 downloads.claude.ai/…/linux-arm64/claude   (glibc, Bun 1.4.3)
@@ -34,54 +29,36 @@ claude-graph.bin   (~1864 modules, ~136 MB, 含源码)
 Android Bun canary (bionic ELF)  ──►  dist/claude   (单 ELF, 225 MB)
 ```
 
-- 模块图里的 1.4.3 字节码与底座版本不一致时，运行时会自动回退到内嵌源码（已实测验证）。
-- 格式细节见 [docs/format.md](docs/format.md)。
+模块图里的字节码与底座版本不符时，运行时会自动回退到内嵌源码。格式细节见 [docs/format.md](docs/format.md)。
 
-## 移植适配（Termux-specific adaptations）
+## 适配：关闭 bfs/ugrep shell 遮蔽
 
-官方原生二进制带一个**原生 prelude**，它内嵌了 bfs/ugrep 多调用程序，并开启
-`launchOptions.searchToolsOptIn()`。Claude Code 因此会往 Bash 会话里注入 `find`/`grep`
-shell 函数，把调用重定向回 CLI 二进制（以 `bfs`/`ugrep` 身份）。bionic 嫁接产物没有
-原生 prelude，这些函数会以 `-G` 调用普通 CLI 并报 `error: unknown option '-G'`。
+官方二进制带原生 prelude，内嵌 bfs/ugrep 并开启 `searchToolsOptIn()`，于是 Claude Code 会往 Bash
+会话注入 `find`/`grep` shell 函数，把调用重定向回 CLI 二进制。嫁接产物没有 prelude，这些函数会以
+`-G` 调用普通 CLI 并报 `unknown option '-G'`。
 
-`tools/adapt_graph.py` 在 graft 前打补丁：把该开关的唯一读取点 `KKn()` 改成返回 true，
-并让所在模块强制源码编译，从而关闭 shell 遮蔽，回退到 Termux 系统 `find`/`grep`。
-该适配只影响 shell 快照生成，启动开销可忽略（~0.7s，与未适配版一致）。
+`tools/adapt_graph.py` 把该开关的唯一读取点 `KKn()` 改成返回 true，并让其所在模块强制源码编译，
+`find`/`grep` 即回退 Termux 系统二进制。只影响 shell 快照生成，启动开销可忽略。
 
 ## 快速开始
 
-前置：Termux（F-Droid/GitHub 版）、aarch64 设备、Android 9+（API 28+，Bun 要求）、
-`pkg install python3 unzip curl ripgrep`。
+Termux（F-Droid/GitHub 版）、aarch64、Android 9+（API 28+）、`pkg install python3 unzip curl ripgrep`。
 
 ```bash
 git clone https://github.com/wmdhs12138/claude-termux.git ~/claude-termux
 cd ~/claude-termux
 make build          # 下载官方二进制 + 校验 + 提取 + 嫁接 + 自检
-make install        # 安装命令到 ~/bin/claude
+make install        # 安装到 ~/bin/claude（同名文件会被覆盖，先自行备份）
 claude              # TUI
 ```
 
-> 如果 `~/bin/claude` 已存在（例如旧的 npm 版 2.1.112 启动器），`make install` 会覆盖它，
-> 先自行备份：`mv ~/bin/claude ~/bin/claude-legacy`。
-
-更新：
-
-```bash
-claude update          # 检查并重建到最新版
-claude update --check  # 只检查（有更新时退出码 1）
-claude update --force  # 强制重建
-```
-
-> `claude update` 由 launcher 拦截：官方自更新会下载 glibc 版覆盖原生产物，这里改为
-> 用最新官方二进制在本地重新走一遍提取/适配/嫁接管线。等价于 `make build VERSION=latest`。
+更新用 `claude update`（`--check` 只检查，`--force` 强制重建）。launcher 拦截了官方自更新——那会
+下载 glibc 版覆盖原生产物——改为在本地重走一遍管线。
 
 ### 账号与模型
 
-launcher **不设置任何账号、模型或端点配置**：登录、模型选择、API 端点全部沿用 Claude Code
-官方默认行为（`claude` 后按提示登录即可）。
-
-需要自定义（例如第三方 Anthropic 兼容端点）时，写本地覆盖文件即可，不会进仓库、也不会被
-`claude update` 覆盖：
+launcher 不设置任何账号、模型或端点，全部沿用官方默认。需要第三方端点等自定义时写本地覆盖文件
+（不进仓库，也不会被 `claude update` 覆盖）：
 
 ```bash
 # ~/.config/claude-code/env.sh   （可用 $CLAUDE_TERMUX_ENV 换路径）
@@ -90,95 +67,60 @@ export ANTHROPIC_AUTH_TOKEN="sk-..."
 export ANTHROPIC_MODEL="deepseek-flash"
 ```
 
-launcher 每次启动会 source 这个文件，然后 exec Claude Code。
-
 ## 环境变量（launcher 已处理）
 
 | 变量 | 作用 |
 |---|---|
 | `USE_BUILTIN_RIPGREP=0` | **必需**：内嵌 ripgrep 是 Linux 二进制，强制用系统 `rg` |
-| `DISABLE_AUTOUPDATER=1` | **必需**：防止官方自更新拉 glibc 版覆盖原生产物（`claude update` 已改为本地重建） |
+| `DISABLE_AUTOUPDATER=1` | **必需**：防止自更新拉 glibc 版覆盖产物 |
 
 ## 仓库结构
 
 ```
 Makefile                  build / fetch / verify / smoke / install
-versions.json             版本与哈希锁定（Claude、底座 Bun、产物；构建后自动刷新）
-scripts/
-  fetch-claude.sh         下载官方 linux-arm64 二进制 + sha256 校验
-  build.sh                全流程管线 + 构建指纹（dist/build-manifest.json）
-  update.sh               claude update 实现（检查/重建）
-  launcher.sh             claude 启动器模板
-tools/
-  extract_graph.py        .bun 节 → standalone 模块图
-  adapt_graph.py          Termux 适配补丁（关闭 bfs/ugrep shell 遮蔽）
-  revive_patch.py         移植手术（vendored, MIT, 来自 Hope2333/opencode-termux）
-  bunsec.py / graph.py    格式分析辅助
-  strip_bytecode.py       字节码剥离（备用方案）
-  tui_smoke.py            PTY TUI 冒烟测试
+versions.json             版本与哈希锁定，构建后自动刷新
+scripts/                  fetch-claude.sh · build.sh · update.sh · launcher.sh
+tools/                    extract_graph.py · adapt_graph.py · revive_patch.py
+                          bunsec.py / graph.py · strip_bytecode.py · tui_smoke.py
 docs/format.md            .bun 节格式逆向笔记
 evidence/                 构建与验证日志
-.github/
-  workflows/build.yml     CI：构建 + 结构校验 + 发布构建凭证（不含二进制）
-  release_notes.py        release notes 生成（凭证表格 / 工具链能力）
+.github/                  workflows/build.yml · release_notes.py
 ```
 
 ## CI 与 Release
 
-`.github/workflows/build.yml` 每天定时 + 手动触发，拆成两个 job：
+每天定时 + 手动触发，两个 job：`build`（`contents: read`）跑全流程做结构校验；`release`
+（`contents: write`）只下载文本报告发 release。**"不发二进制"是结构保证**：build 没有发布权限，
+release 拒绝任何 > 1 MiB 的 asset。产物是 Anthropic 专有代码的修改副本，上传即分发。
 
-- **`build`**（`contents: read`）：x64 runner 上跑完整管线并做 ELF/aarch64 结构校验
-  （`SKIP_RUN=1`，runner 跑不了 bionic 产物），上传构建指纹和日志。
-  **这个 job 完全没有发布权限** —— "不发二进制"是结构上的保证，不是靠自觉。
-- **`release`**（`contents: write`）：只下载上面那几个文本报告，发布两类 release。
-
-**Release 永远不含二进制。** 产物是 Anthropic 专有代码的修改副本，上传即分发。
-`release` job 有一道硬闸：任何超过 1 MiB 的 asset 直接报错退出（225 MB 的产物一放就炸）。
-
-### 两类 release
-
-| tag | 触发条件 | 内容 |
+| tag | 触发 | 内容 |
 |---|---|---|
-| `v<claude 版本>`，如 `v2.1.270` | 官方 `latest` 变了且该 tag 不存在 | 官方校验和、产物 sha256、图 sha256、底座 Bun 哈希、复现命令 + 4 个文本报告 |
-| `toolchain-v<N>-<指纹>`，如 `toolchain-v2-3797455` | `scripts/` + `tools/` 的内容指纹变了 | 工具链能力、格式兼容范围、自上一个工具链版本的提交列表 |
+| `v<claude 版本>` | 官方 `latest` 变了 | 官方校验和、产物/图 sha256、底座 Bun 哈希、复现命令 + 文本报告 |
+| `toolchain-v<N>-<指纹>` | `scripts/` + `tools/` 内容变了 | 工具链能力、格式兼容范围、变更列表 |
 
-工具链指纹是 `scripts/` 与 `tools/` 全部文件内容的 sha256 前 7 位，**直接写进 tag**。
-所以编号不可能与实际代码漂移：字节变了就没有 tag 能匹配，自动切下一个号，不需要手工 bump。
-
-### 验证范围
-
-release notes 会区分两种数据：CI 的结构校验（产物**没有被执行过**，x64 runner 跑不了
-bionic aarch64）和维护者的实机验证（记录在 `versions.json`）。两者的产物 sha256 一致时，
-notes 会明说"构建可复现"；不一致时会提示大概率是底座 Bun canary 漂移。
-
-需要产物请在自己的设备上 `make build`。
+指纹是 `scripts/` + `tools/` 全部内容的 sha256 前 7 位，直接写进 tag，所以编号不会与代码漂移。
+release notes 区分 CI 结构校验（产物未被执行）与实机验证（见 `versions.json`）：两者 sha256 一致时
+说"可复现"，不一致时提示底座 canary 漂移。需要产物请自己 `make build`。
 
 ## 版本锁定与底座漂移
 
-`versions.json` 锁定 Claude 版本、官方二进制 sha256、底座 Bun revision 与产物 sha256。
-每次 `make build` / `claude update` 结束时会**自动刷新**它，不会落后于 `dist/build-manifest.json`。
+`versions.json` 锁 Claude 版本、官方 sha256、底座 Bun revision、产物 sha256，每次构建自动刷新
+（`verified_on` 只代表本机跑通了 `--version`；CI 构建写 `null`）。
 
-- `claude_linux_arm64_sha256`：官方 linux-arm64 二进制的 sha256（`fetch-claude.sh` 下载时已比对过官方 manifest）。
-- `verified_output.verified_on`：**本机执行过 `dist/claude --version` 且版本串匹配**的日期，
-  即 build.sh 第 5 步的校验。TUI、Bash/Read/Grep 工具、对话往返等更深的验证仍需手工做，
-  不会被自动写入。
-- CI 以 `SKIP_RUN=1` 构建时产物从未被执行，`device` / `verified_on` 写 `null`，
-  而不是沿用上一次的值。CI 只有 `contents: read`，不会污染已提交的记录。
-
-底座用的是 Bun **canary** 滚动 tag，若 `make build` 提示底座哈希漂移，说明 Bun 可能改了图格式，
-需要重新适配（本项目已验证 1.4.3-canary.1+a749e0a9b）。
+底座是 Bun **canary** 滚动 tag。`make build` 提示底座哈希漂移时，Bun 可能改了图格式，需要重新适配
+（已验证 1.4.3-canary.1+a749e0a9b）。
 
 ## 已知限制
 
-- 底座 canary 滚动，Bun 修改 graph 格式后需跟进适配。
-- 内嵌 ripgrep / 自动更新不可用（launcher 已用系统 `rg` 和禁用更新绕过）。
+- 底座 canary 滚动，Bun 改图格式后需跟进适配。
+- 内嵌 ripgrep / 自动更新不可用（launcher 已绕过）。
 - 产物 225 MB，未压缩；如需可自行 UPX。
-- 未在 Android 8/9 以下、非 aarch64 设备验证。
+- 未在 Android 9 以下、非 aarch64 设备验证。
 
 ## 法律
 
-本项目只包含工具链，不含任何 Anthropic 代码。`make build` 从 Anthropic 官方 CDN 下载二进制并在本地
-处理。Claude Code 是 Anthropic 的闭源产品，请遵守其服务条款；产物**仅供个人研究使用，请勿再分发**。
+本项目只含工具链，不含任何 Anthropic 代码；`make build` 从官方 CDN 下载并在本地处理。Claude Code
+是 Anthropic 的闭源产品，请遵守其服务条款；产物**仅供个人研究使用，请勿再分发**。
 
 ## 致谢
 
