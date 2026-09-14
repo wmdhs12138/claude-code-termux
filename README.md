@@ -57,8 +57,8 @@ claude              # TUI
 
 ### 账号与模型
 
-launcher 不设置任何账号、模型或端点，全部沿用官方默认。需要第三方端点等自定义时写本地覆盖文件
-（不进仓库，也不会被 `claude update` 覆盖）：
+launcher 不设置任何账号、模型或端点，全部沿用官方默认。自定义写本地覆盖文件（不进仓库）。它最先被
+source，所以除了 `ANTHROPIC_*`，也能覆盖 launcher 自己的 `CLAUDE_CODE_TERMUX_ROOT` / `_BIN`：
 
 ```bash
 # ~/.config/claude-code/env.sh   （可用 $CLAUDE_CODE_TERMUX_ENV 换路径）
