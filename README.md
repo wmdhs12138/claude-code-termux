@@ -42,7 +42,7 @@ Android Bun canary (bionic ELF)  ──►  dist/claude   (单 ELF, 225 MB)
 
 ## 快速开始
 
-Termux（F-Droid/GitHub 版）、aarch64、Android 9+（API 28+）、`pkg install python3 unzip curl ripgrep`。
+Termux（F-Droid/GitHub 版）、aarch64、Android 9+（API 28+）、`pkg install python3 unzip curl ripgrep util-linux`。
 
 ```bash
 git clone https://github.com/wmdhs12138/claude-code-termux.git ~/claude-code-termux
@@ -107,12 +107,14 @@ release notes 区分 CI 结构校验（产物未被执行）与实机验证（�
 
 ## 版本锁定与底座漂移
 
-`versions.json` 锁 Claude 版本、官方 sha256、底座 Bun revision、产物 sha256，每次构建自动刷新
-（`verified_on` 只代表本机跑通了 `--version`；CI 构建写 `null`）。
+`versions.json` 锁 Claude 版本、官方 sha256、底座 Bun revision、产物 sha256，每次成功构建后自动刷新
+（`verified_on` 只代表本机跑通了 `--version`；CI 构建写 `null`）。对已记录的 Claude 版本，下载内容
+必须与锁定 sha256 一致，否则构建会在替换现有产物前失败。
 
-底座是 Bun **canary** 滚动 tag，`work/` 会缓存它，所以本机不会自动跟着漂。`make build` 提示底座
-哈希漂移时，说明底座已换、图格式可能变了，需要重新适配（当前钉住的底座见 `versions.json`）；
-想主动试当前 canary 用 `make refresh-base`，回收全部缓存（`work/` 约 1 GB）用 `make distclean`。
+底座是 Bun **canary** 滚动 tag，`work/` 会缓存它，所以本机不会自动跟着漂。普通 `make build` 会
+严格核对当前底座与 `versions.json`：哈希漂移时直接停止，避免悄悄接受变化。想主动下载、验证并在
+成功后接受当前 canary，使用 `make refresh-base`；回收全部缓存（`work/` 约 1 GB）用
+`make distclean`。
 
 ## 已知限制
 

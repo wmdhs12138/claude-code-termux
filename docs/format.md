@@ -141,8 +141,8 @@ find () { ... ( exec -a bfs   "$_cc_bin" -S dfs ... ) }
 ## 6. 证据
 
 - `evidence/sha256.txt`：官方二进制校验
-- `evidence/revive-1.log`：1.4.2 底座嫁接（后续段错误，记录失败路径）
-- `evidence/revive-3.log`：1.4.3-canary 底座嫁接（成功）
+- `evidence/revive-1.log`：1.4.2 底座嫁接（后续段错误，记录失败路径；本地证据，不进仓库）
+- `evidence/revive-3.log`：1.4.3-canary 底座嫁接（成功；本地证据，不进仓库）
 - `dist/build-manifest.json`：每次构建的版本/哈希指纹、适配列表（取自 `adapt_graph.py`
   的 `--report` 输出，不再靠手工维护）与 graft 自检结果（payload vaddr / 模块数 / entry）
 - `work/adapt-report.json` · `work/verify-graft.json`：上面两项的原始报告，CI 一并归档

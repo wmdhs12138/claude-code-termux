@@ -6,7 +6,7 @@ endif
 ROOT  := $(CURDIR)
 VERSION ?= latest
 
-.PHONY: build update fetch verify smoke install uninstall clean refresh-base distclean fingerprint
+.PHONY: build update fetch verify smoke test install uninstall clean refresh-base distclean fingerprint
 
 build:
 	bash scripts/build.sh $(VERSION)
@@ -23,6 +23,9 @@ verify:
 smoke:
 	python3 tools/tui_smoke.py ./dist/claude 7
 
+test:
+	python3 -m unittest discover -s tests -v
+
 # The launcher template substitutes @ROOT@ through sed, so escape the path
 # first: an '&' or '|' in it would otherwise silently produce a launcher that
 # points somewhere else.
@@ -37,7 +40,7 @@ uninstall:
 	rm -f "$(HOME)/bin/claude"
 
 clean:
-	rm -f work/claude-graph.bin dist/claude
+	flock -n .build.lock -c 'rm -f work/claude-graph.bin dist/claude'
 
 # The same number CI puts in `toolchain-v<N>-<fingerprint>`: tracked files only,
 # so a stray __pycache__ cannot make it disagree with the published tag. The set
@@ -50,11 +53,10 @@ fingerprint:
 # notices that the tag moved. This drops the cache and rebuilds against the
 # current one -- the way to find out whether a new canary still grafts.
 refresh-base:
-	rm -rf work/bun-android work/bun-android.zip
-	bash scripts/build.sh $(VERSION)
+	REFRESH_BASE=1 bash scripts/build.sh $(VERSION)
 
 # work/ holds ~1 GB of caches (official binaries, base Bun, graphs) and dist/
 # the 225 MB artifact. `make build` recreates both; the downloaded binaries and
 # the base are re-fetched.
 distclean:
-	rm -rf work dist
+	flock -n .build.lock -c 'rm -rf work dist'

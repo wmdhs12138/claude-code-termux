@@ -6,3 +6,8 @@ evidence/*.log
 *.zip
 *.log
 __pycache__/
+/.build.lock
+/.promotion-in-progress
+/.promotion-in-progress.new
+/.versions.json.before-promote
+/evidence/.build-manifest.before-promote

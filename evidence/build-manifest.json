@@ -1,5 +1,6 @@
 {
   "claude": "2.1.270",
+  "claude_linux_arm64_sha256": "7bf9f33acc124df9abccf6f2366397a82a740378d535fa12d426fa77fdbc9946",
   "output_version": "2.1.270 (Claude Code)",
   "output_sha256": "1615ae6784fd984dc32daf84398078147abc1720920cd7063890733c799d85ca",
   "output_size": 224728560,
@@ -19,5 +20,5 @@
     "version": "1.4.3-canary.1+86771d09f",
     "binary_sha256": "b19adccd99599eb5a79bee723a811dcae2f349eb10ac5150bbb9413a4e5ad62f"
   },
-  "built_at": "2026-09-14T03:49:55+00:00"
+  "built_at": "2026-09-14T06:35:34+00:00"
 }

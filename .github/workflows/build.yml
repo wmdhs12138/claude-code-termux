@@ -34,7 +34,7 @@ jobs:
       version: ${{ steps.latest.outputs.version }}
       unreleased: ${{ steps.latest.outputs.unreleased }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0 # tags tell us what is already released
 
@@ -43,10 +43,10 @@ jobs:
         run: |
           set -euo pipefail
           V="$(curl -fsSL --max-time 30 https://downloads.claude.ai/claude-code-releases/latest)"
-          case "$V" in
-            [0-9]*.[0-9]*.[0-9]*) ;;
-            *) echo "::error::bad version '$V'"; exit 1 ;;
-          esac
+          if ! [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::bad version '$V'"
+            exit 1
+          fi
           echo "version=$V" >> "$GITHUB_OUTPUT"
           if git tag -l | grep -qx "v$V"; then
             echo "unreleased=false" >> "$GITHUB_OUTPUT"
@@ -56,16 +56,32 @@ jobs:
             echo "v$V is unreleased"
           fi
 
+      - name: Run regression tests
+        run: make test
+
       - name: Build and verify (no execution on x64)
         env:
           SKIP_RUN: "1"
-        run: make build VERSION=latest
+        run: make build VERSION=${{ steps.latest.outputs.version }}
+
+      - name: Verify report version
+        env:
+          EXPECTED_VERSION: ${{ steps.latest.outputs.version }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          with open("dist/build-manifest.json") as f:
+              actual = json.load(f)["claude"]
+          expected = os.environ["EXPECTED_VERSION"]
+          if actual != expected:
+              raise SystemExit(f"manifest version mismatch: expected {expected}, got {actual}")
+          PY
 
       - name: Show build manifest
         run: cat dist/build-manifest.json
 
       - name: Upload reports (no binary)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: build-reports
           path: |
@@ -89,11 +105,11 @@ jobs:
       VERSION: ${{ needs.build.outputs.version }}
       UNRELEASED: ${{ needs.build.outputs.unreleased }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: build-reports
           path: reports

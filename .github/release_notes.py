@@ -71,7 +71,7 @@ def claude_notes(manifest, versions, toolchain):
 
 ```bash
 git clone https://github.com/wmdhs12138/claude-code-termux.git
-cd claude-code-termux && make build
+cd claude-code-termux && make build VERSION={ver}
 sha256sum dist/claude
 ```
 
@@ -80,7 +80,7 @@ sha256sum dist/claude
 | 项 | 值 |
 |---|---|
 | Claude Code | `{ver}` |
-| 官方 linux-arm64 sha256 | `{v.get("claude_linux_arm64_sha256", "?")}` |
+| 官方 linux-arm64 sha256 | `{m.get("claude_linux_arm64_sha256", v.get("claude_linux_arm64_sha256", "?"))}` |
 | 产物 sha256 | `{m.get("output_sha256", "?")}` |
 | 产物大小 | {m.get("output_size", 0):,} B |
 | 模块图 sha256 | `{m.get("graph_sha256", "?")}` |
@@ -99,8 +99,9 @@ graft 闭环（`.bun` size 字段 → payload 长度 → trailer → 模块表�
 
 ## 复现注意
 
-底座是 Bun **canary** 滚动 tag。若上表钉的 Bun 哈希已经漂移，`make build` 会在结尾打
-WARNING，此时复现出的产物 sha256 可能与本 release 不同 —— 那是底座换了，不是构建不可复现。
+底座是 Bun **canary** 滚动 tag。普通 `make build` 会严格核对上表钉住的 Bun 哈希，若 tag
+已经漂移则在替换现有产物前停止。只有显式执行 `make refresh-base` 才会下载、验证并在成功后
+接受新的底座哈希。
 """
 
 
