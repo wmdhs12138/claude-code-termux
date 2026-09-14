@@ -13,6 +13,17 @@ WORK="$ROOT/work"
 DIST="$ROOT/dist"
 mkdir -p "$WORK" "$DIST"
 
+# A build that fails verification must not take a working dist/claude with it,
+# and the one message that matters then is "your previous build is untouched" --
+# say it loudly instead of dying on a bare `set -e`.
+die_kept() {
+  echo "build: $1" >&2
+  echo "build: $DIST/claude was left exactly as it was; a failed build never" >&2
+  echo "build: replaces it. The candidate is at $DIST/.claude.new" >&2
+  echo "build: To fall back to a known-good version: make build VERSION=<version>" >&2
+  exit 1
+}
+
 # 1. official Claude Code linux-arm64 binary (checksum-verified)
 CLAUDE_BIN="$(bash "$ROOT/scripts/fetch-claude.sh" "$VERSION" "$WORK")"
 VER="$(cat "$WORK/.claude-version")"
@@ -48,34 +59,41 @@ echo "build: graph extracted ($(stat -c%s "$GRAPH") bytes)" >&2
 
 # 3b. Termux adaptations (disable native bfs/ugrep shell shadowing, etc.)
 GRAPH_ADAPTED="$WORK/claude-graph-adapted.bin"
-python3 "$ROOT/tools/adapt_graph.py" "$GRAPH" "$GRAPH_ADAPTED" > "$WORK/adapt-report.log"
-echo "build: adaptations applied ($(cat "$WORK/adapt-report.log" | head -1))" >&2
+python3 "$ROOT/tools/adapt_graph.py" "$GRAPH" "$GRAPH_ADAPTED" --report "$WORK/adapt-report.json" > "$WORK/adapt-report.log"
+echo "build: adaptations applied ($(head -1 "$WORK/adapt-report.log"))" >&2
 
 # 4. graft onto the Android Bun ELF (BUN_COMPILED.size + PT_LOAD surgery).
-#    Build to a temp path and rename: safe even while dist/claude is running.
+#    Staged to a temp path and left there: it does NOT replace dist/claude until
+#    step 5 has passed. A broken graft is what a rolled base Bun produces, and
+#    swapping a working binary out for it leaves nothing to fall back to.
+#    (Writing the staging file is safe even while dist/claude is running.)
 python3 "$ROOT/tools/revive_patch.py" --bun "$BUN" --graph "$GRAPH_ADAPTED" --out "$DIST/.claude.new" > "$WORK/revive-report.log" 2>&1
-mv -f "$DIST/.claude.new" "$DIST/claude"
-chmod +x "$DIST/claude"
-echo "build: grafted ($(stat -c%s "$DIST/claude") bytes)" >&2
+chmod +x "$DIST/.claude.new"
+echo "build: grafted ($(stat -c%s "$DIST/.claude.new") bytes, staged)" >&2
 
-# 5. verify (SKIP_RUN=1 for x64 CI runners: structure check only, no execution)
+# 5. verify the staged candidate.
+#    The structural check walks the graft closure (size field -> payload length
+#    -> trailer -> module table) and runs everywhere, including the x64 CI
+#    runner, which cannot execute an aarch64 bionic binary at all. The exec
+#    check runs only where the artifact can actually run.
+python3 "$ROOT/tools/verify_graft.py" "$DIST/.claude.new" "$(stat -c%s "$GRAPH_ADAPTED")" | tee "$WORK/verify-graft.json"
 if [ "${SKIP_RUN:-0}" = "1" ]; then
-  python3 - "$DIST/claude" <<'PY'
-import struct, sys
-with open(sys.argv[1], 'rb') as f:
-    h = f.read(20)
-assert h[:4] == b'\x7fELF', 'not an ELF'
-assert struct.unpack_from('<H', h, 18)[0] == 0xB7, 'not aarch64'
-print(f'build: ELF aarch64 OK ({sys.argv[1]})')
-PY
   OUT_VER="$VER (not executed; SKIP_RUN=1)"
 else
-  OUT_VER="$("$DIST/claude" --version)"
+  # A segfault here is the classic rolled-base failure, and it is exactly the
+  # case where the user most needs to be told the old binary is still there --
+  # so it gets the same treatment as a version mismatch, not a bare set -e exit.
+  if ! OUT_VER="$("$DIST/.claude.new" --version)"; then
+    die_kept "the staged candidate did not run to completion (see the shell's own message above)"
+  fi
   case "$OUT_VER" in
     "$VER"*) ;;
-    *) echo "build: version mismatch: expected $VER, got $OUT_VER" >&2; exit 1 ;;
+    *) die_kept "version mismatch: expected $VER, got $OUT_VER" ;;
   esac
 fi
+
+# 5b. promote the candidate now that it has passed.
+mv -f "$DIST/.claude.new" "$DIST/claude"
 
 # 6. build manifest + pinned-base drift check
 OUT_SHA="$(sha256sum "$DIST/claude" | cut -d' ' -f1)"
@@ -87,18 +105,30 @@ if [ -n "$PINNED_BUN_SHA" ] && [ "$BUN_SHA" != "$PINNED_BUN_SHA" ]; then
   echo "build: WARNING base Bun hash drifted from versions.json" >&2
   echo "       pinned=$PINNED_BUN_SHA" >&2
   echo "       actual=$BUN_SHA" >&2
+  echo "       The base is a rolling canary tag, so a new base may have changed the" >&2
+  echo "       graph format. work/ caches the base, which is why this machine can" >&2
+  echo "       keep building against the old one: 'make refresh-base' fetches the" >&2
+  echo "       current tag on purpose." >&2
 fi
 python3 - "$DIST/build-manifest.json" "$VER" "$OUT_VER" "$OUT_SHA" "$OUT_SIZE" \
-        "$BUN_VER" "$BUN_SHA" "$GRAPH_SHA" "$(cat "$WORK/.claude-version" 2>/dev/null || echo "$VER")" <<'PY'
+        "$BUN_VER" "$BUN_SHA" "$GRAPH_SHA" "$WORK/adapt-report.json" "$WORK/verify-graft.json" <<'PY'
 import json, sys, datetime
-(path, ver, out_ver, out_sha, out_size, bun_ver, bun_sha, graph_sha, _v) = sys.argv[1:10]
+(path, ver, out_ver, out_sha, out_size, bun_ver, bun_sha, graph_sha,
+ adapt_path, graft_path) = sys.argv[1:11]
+def load(p):
+    with open(p) as f:
+        return json.load(f)
 json.dump({
     "claude": ver,
     "output_version": out_ver,
     "output_sha256": out_sha,
     "output_size": int(out_size),
     "graph_sha256": graph_sha,
-    "adaptations": ["search_shadow"],
+    # Read from the adaptation run itself, never a hardcoded list: a credential
+    # that understates what the build did is worse than no credential.
+    "adaptations": load(adapt_path)["adaptations"],
+    # What the structural check verified about this exact artifact (step 5).
+    "graft": load(graft_path),
     "base_bun": {"version": bun_ver, "binary_sha256": bun_sha},
     "built_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
 }, open(path, "w"), indent=2)
@@ -119,10 +149,12 @@ if [ "${SKIP_RUN:-0}" != "1" ]; then
   VERIFIED_ON="$(date -u +%Y-%m-%d)"
 fi
 python3 - "$ROOT/versions.json" "$VER" "$CLAUDE_SHA" "$BUN_VER" "$BUN_SHA" \
-        "$OUT_SHA" "$OUT_SIZE" "$GRAPH_SHA" "$DEVICE" "$VERIFIED_ON" "$BUN_URL" <<'PY'
+        "$OUT_SHA" "$OUT_SIZE" "$GRAPH_SHA" "$DEVICE" "$VERIFIED_ON" "$BUN_URL" \
+        "$WORK/adapt-report.json" <<'PY'
 import json, sys
 (path, ver, claude_sha, bun_ver, bun_sha,
- out_sha, out_size, graph_sha, device, verified_on, bun_url) = sys.argv[1:12]
+ out_sha, out_size, graph_sha, device, verified_on, bun_url,
+ adapt_path) = sys.argv[1:13]
 try:
     doc = json.load(open(path))
 except (OSError, ValueError):
@@ -139,7 +171,7 @@ doc["verified_output"] = {
     "sha256": out_sha,
     "size": int(out_size),
     "graph_sha256": graph_sha,
-    "adaptations": ["search_shadow"],
+    "adaptations": json.load(open(adapt_path))["adaptations"],
     # verified_on = the built binary was executed here and reported the
     # expected version (build.sh step 5). Deeper checks (TUI, tools) stay manual.
     "device": device or None,

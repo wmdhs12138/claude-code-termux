@@ -40,6 +40,13 @@ def claude_notes(manifest, versions, toolchain):
     # "hashes match" without checking would be exactly the kind of stale claim
     # this file exists to avoid.
     ci_sha, dev_sha = m.get("output_sha256"), vo.get("sha256")
+    # Facts verify_graft.py checked about this artifact. Absent for manifests
+    # built before that check existed, hence the dash instead of a fake value.
+    g = m.get("graft") or {}
+    graft_cell = "—"
+    if g:
+        graft_cell = (f"`{g.get('modules', '?')}` 模块 · entry `{g.get('entry_point', '?')}`"
+                      f" · payload @ `0x{g.get('payload_vaddr', 0):x}`")
     if verified_on and ci_sha and dev_sha and ci_sha == dev_sha:
         device_line = (
             f"维护者已在本机实机验证 **{ver}**（{verified_on}，{device}），"
@@ -80,11 +87,13 @@ sha256sum dist/claude
 | 底座 Bun | `{bun.get("version", "?")}`（`{short(bun.get("binary_sha256"))}`） |
 | 工具链 | `{toolchain}` |
 | 适配 | {", ".join(m.get("adaptations") or []) or "—"} |
+| Graft 结构自检 | {graft_cell} |
 
 ## 验证范围
 
 上表来自 **x64 runner 上的结构校验构建**（`SKIP_RUN=1`）：校验了 ELF/aarch64 结构、
-模块图指纹与产物哈希，但**没有执行过该产物**（runner 跑不了 bionic aarch64）。
+graft 闭环（`.bun` size 字段 → payload 长度 → trailer → 模块表）、模块图指纹与产物哈希，
+但**没有执行过该产物**（runner 跑不了 bionic aarch64）。
 
 {device_line}
 
@@ -95,12 +104,17 @@ WARNING，此时复现出的产物 sha256 可能与本 release 不同 —— 那
 """
 
 
-def toolchain_notes(toolchain, fingerprint, predecessor, changelog, released):
+def toolchain_notes(toolchain, fingerprint, predecessor, changelog, released, versions_doc):
     if predecessor and predecessor != "-":
         scope = f"自上一个工具链版本 `{predecessor}` 以来，触及 `scripts/` 或 `tools/` 的提交："
     else:
         scope = "首个版本化工具链。此前 `scripts/` 与 `tools/` 的历史提交（最近 20 条）："
     versions = released or "（尚无）"
+    # Read from versions.json rather than hardcoding: the pinned base moves, and
+    # a hand-typed "verified base" would go stale without anything noticing.
+    base = (versions_doc.get("base_bun") or {}).get("version") or "?"
+    vo = versions_doc.get("verified_output") or {}
+    base_note = f"（{vo.get('verified_on')} 实机验证：{vo.get('device')}）" if vo.get("verified_on") else ""
     return f"""# 工具链 {toolchain.split("-")[1]} (`{fingerprint}`)
 
 `scripts/` + `tools/` 全部文件内容的 sha256 前 7 位为 `{fingerprint}`，即本版本的工具链指纹。
@@ -113,7 +127,7 @@ def toolchain_notes(toolchain, fingerprint, predecessor, changelog, released):
 - **适配**：`search_shadow` —— 关闭 bfs/ugrep shell 遮蔽，`find`/`grep` 回退 Termux 系统二进制。
 - **产物**：单个 bionic aarch64 ELF，零 glibc / 零 ptrace / 零 proot，直接 `execve`。
 - **已发布过 release 的 Claude 版本**：{versions}
-- **已验证的底座**：Bun `1.4.3-canary.1+a749e0a9b`
+- **已验证的底座**：Bun `{base}`{base_note}
 
 格式细节见仓库 [`docs/format.md`](../blob/main/docs/format.md)。
 本 release 同样**不含任何二进制**。
@@ -143,6 +157,7 @@ def main():
     t.add_argument("--predecessor", default="-")
     t.add_argument("--changelog", required=True)
     t.add_argument("--released", default="")
+    t.add_argument("--versions", default="", help="versions.json, for the verified-base line")
 
     a = ap.parse_args()
     if a.kind == "claude":
@@ -154,7 +169,8 @@ def main():
         except OSError:
             changelog = ""
         notes = toolchain_notes(
-            a.toolchain, a.fingerprint, a.predecessor, changelog, a.released
+            a.toolchain, a.fingerprint, a.predecessor, changelog, a.released,
+            load(a.versions),
         )
 
     with open(a.out, "w") as f:

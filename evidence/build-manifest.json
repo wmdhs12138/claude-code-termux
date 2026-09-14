@@ -7,9 +7,17 @@
   "adaptations": [
     "search_shadow"
   ],
+  "graft": {
+    "payload_vaddr": 88981504,
+    "payload_size": 135681504,
+    "modules": 1864,
+    "entry_point": 5,
+    "flags": "0x1fff",
+    "trailer_ok": true
+  },
   "base_bun": {
     "version": "1.4.3-canary.1+a749e0a9b",
     "binary_sha256": "4c6a717da4dc1214ae008c76927e92e4bb18e5a7bdfcae2ba3fd0835cd1bb7e4"
   },
-  "built_at": "2026-09-14T02:43:42+00:00"
+  "built_at": "2026-09-14T03:45:35+00:00"
 }

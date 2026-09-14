@@ -102,6 +102,10 @@ Claude 2.1.270：`flags = 0x1fff`（bit 0–12 全开），1864 个模块，`ent
 4. 把 payload vaddr 写进 `.bun[0]`（`BUN_COMPILED.size`）；
 5. 扩展该 PT_LOAD 的 `p_filesz`/`p_memsz` 覆盖新数据。
 
+产物是否成形由 `tools/verify_graft.py` 反向校验：`.bun[0]` → `[u64 payload_len]` →
+payload 尾部 trailer → Offsets 结构 → 模块表首尾相接。这条链就是运行时启动时走的路径，
+x64 CI 执行不了 aarch64 产物，只能靠它把关（见 §6）。
+
 ## 5. 移植适配：关闭 bfs/ugrep shell 遮蔽
 
 官方二进制由「原生 prelude + Bun standalone」组成。prelude 内嵌 bfs/ugrep，并通过
@@ -139,4 +143,6 @@ find () { ... ( exec -a bfs   "$_cc_bin" -S dfs ... ) }
 - `evidence/sha256.txt`：官方二进制校验
 - `evidence/revive-1.log`：1.4.2 底座嫁接（后续段错误，记录失败路径）
 - `evidence/revive-3.log`：1.4.3-canary 底座嫁接（成功）
-- `dist/build-manifest.json`：每次构建的版本/哈希指纹与适配列表
+- `dist/build-manifest.json`：每次构建的版本/哈希指纹、适配列表（取自 `adapt_graph.py`
+  的 `--report` 输出，不再靠手工维护）与 graft 自检结果（payload vaddr / 模块数 / entry）
+- `work/adapt-report.json` · `work/verify-graft.json`：上面两项的原始报告，CI 一并归档

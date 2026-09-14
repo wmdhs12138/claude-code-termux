@@ -6,7 +6,7 @@ endif
 ROOT  := $(CURDIR)
 VERSION ?= latest
 
-.PHONY: build update fetch verify smoke install uninstall clean
+.PHONY: build update fetch verify smoke install uninstall clean refresh-base distclean
 
 build:
 	bash scripts/build.sh $(VERSION)
@@ -23,9 +23,13 @@ verify:
 smoke:
 	python3 tools/tui_smoke.py ./dist/claude 7
 
+# The launcher template substitutes @ROOT@ through sed, so escape the path
+# first: an '&' or '|' in it would otherwise silently produce a launcher that
+# points somewhere else.
 install:
 	mkdir -p "$(HOME)/bin"
-	sed "s|@ROOT@|$(ROOT)|g" scripts/launcher.sh > "$(HOME)/bin/claude"
+	ROOT_ESC=$$(printf '%s' '$(ROOT)' | sed 's/[&|\\]/\\&/g'); \
+	  sed "s|@ROOT@|$$ROOT_ESC|g" scripts/launcher.sh > "$(HOME)/bin/claude"
 	chmod +x "$(HOME)/bin/claude"
 	@echo "installed: $(HOME)/bin/claude"
 
@@ -34,3 +38,16 @@ uninstall:
 
 clean:
 	rm -f work/claude-graph.bin dist/claude
+
+# The base is a rolling canary tag, but work/ caches it, so a plain build never
+# notices that the tag moved. This drops the cache and rebuilds against the
+# current one -- the way to find out whether a new canary still grafts.
+refresh-base:
+	rm -rf work/bun-android work/bun-android.zip
+	bash scripts/build.sh $(VERSION)
+
+# work/ holds ~1 GB of caches (official binaries, base Bun, graphs) and dist/
+# the 225 MB artifact. `make build` recreates both; the downloaded binaries and
+# the base are re-fetched.
+distclean:
+	rm -rf work dist

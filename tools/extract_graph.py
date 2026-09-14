@@ -56,18 +56,30 @@ def main():
         data = f.read(size)
     payload_len = struct.unpack_from('<Q', data, 0)[0]
     payload = data[8:8+payload_len]
-    print(json.dumps({'section_off': off, 'section_size': size, 'section_addr': addr,
-                      'payload_len': payload_len, 'trailer_ok': payload.endswith(TRAILER)}, indent=1))
+    section = {'off': off, 'size': size, 'addr': addr, 'payload_len': payload_len,
+               'trailer_ok': payload.endswith(TRAILER)}
     o = payload_len - 32 - len(TRAILER)
     byte_count, mod_off, mod_len, entry, argv0, argv1, flags = struct.unpack_from('<QIIIIII', payload, o)
-    stride = 52 if mod_len % 52 == 0 else 36
-    print(json.dumps({'byte_count': byte_count, 'mod_off': mod_off, 'mod_len': mod_len,
-                      'entry': entry, 'argv0': argv0, 'argv1': argv1, 'flags': hex(flags),
-                      'flags_set': [FLAG_NAMES.get(i, f'bit{i}') for i in range(32) if flags >> i & 1],
-                      'stride': stride, 'module_count': mod_len // stride}, indent=1))
+    # 52 = Bun >= 1.4 new-section records, 36 = the <= 1.3 layout (which this
+    # toolchain does not support). Both divisibility facts go into the report:
+    # if mod_len divides by both, the module count is an interpretation of the
+    # numbers, not a measurement, and should not be quoted as a credential.
+    if mod_len % 52 == 0:
+        stride = 52
+    elif mod_len % 36 == 0:
+        raise SystemExit(f'module table is 36-strided ({mod_len} bytes), the pre-1.4 '
+                         'layout this toolchain does not support')
+    else:
+        raise SystemExit(f'module table length {mod_len} is neither 52- nor 36-aligned')
+    offsets = {'byte_count': byte_count, 'mod_off': mod_off, 'mod_len': mod_len,
+               'mod_len_mod52': mod_len % 52, 'mod_len_mod36': mod_len % 36,
+               'entry': entry, 'argv0': argv0, 'argv1': argv1, 'flags': hex(flags),
+               'flags_set': [FLAG_NAMES.get(i, f'bit{i}') for i in range(32) if flags >> i & 1],
+               'stride': stride, 'module_count': mod_len // stride}
     with open(outpath, 'wb') as f:
         f.write(payload)
-    print(f"wrote {outpath} ({len(payload)} bytes)")
+    print(json.dumps({'section': section, 'offsets': offsets,
+                      'output': {'path': outpath, 'bytes': len(payload)}}, indent=1))
 
 if __name__ == '__main__':
     main()

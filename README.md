@@ -80,8 +80,8 @@ export ANTHROPIC_MODEL="deepseek-flash"
 Makefile                  build / fetch / verify / smoke / install
 versions.json             版本与哈希锁定，构建后自动刷新
 scripts/                  fetch-claude.sh · build.sh · update.sh · launcher.sh
-tools/                    extract_graph.py · adapt_graph.py · revive_patch.py
-                          bunsec.py / graph.py · strip_bytecode.py · tui_smoke.py
+tools/                    extract_graph.py · adapt_graph.py · verify_graft.py
+                          revive_patch.py · bunsec.py / graph.py · tui_smoke.py
 docs/format.md            .bun 节格式逆向笔记
 evidence/                 构建与验证日志
 .github/                  workflows/build.yml · release_notes.py
@@ -89,9 +89,11 @@ evidence/                 构建与验证日志
 
 ## CI 与 Release
 
-每天定时 + 手动触发，两个 job：`build`（`contents: read`）跑全流程做结构校验；`release`
-（`contents: write`）只下载文本报告发 release。**"不发二进制"是结构保证**：build 没有发布权限，
-release 拒绝任何 > 1 MiB 的 asset。产物是 Anthropic 专有代码的修改副本，上传即分发。
+每天定时 + 手动触发，两个 job：`build`（`contents: read`）跑全流程，并做 graft 闭环自检
+（`verify_graft.py`：`.bun` size 字段 → payload → trailer → 模块表）。x64 runner 执行不了
+aarch64 产物，这是唯一能自动把关的地方；实机验证仍靠 `make build` 后自己跑。
+`release`（`contents: write`）只下载文本报告发 release。**"不发二进制"是结构保证**：build 没有
+发布权限，release 拒绝任何 > 1 MiB 的 asset。产物是 Anthropic 专有代码的修改副本，上传即分发。
 
 | tag | 触发 | 内容 |
 |---|---|---|
@@ -107,8 +109,9 @@ release notes 区分 CI 结构校验（产物未被执行）与实机验证（�
 `versions.json` 锁 Claude 版本、官方 sha256、底座 Bun revision、产物 sha256，每次构建自动刷新
 （`verified_on` 只代表本机跑通了 `--version`；CI 构建写 `null`）。
 
-底座是 Bun **canary** 滚动 tag。`make build` 提示底座哈希漂移时，Bun 可能改了图格式，需要重新适配
-（已验证 1.4.3-canary.1+a749e0a9b）。
+底座是 Bun **canary** 滚动 tag，`work/` 会缓存它，所以本机不会自动跟着漂。`make build` 提示底座
+哈希漂移时，说明底座已换、图格式可能变了，需要重新适配（已验证 1.4.3-canary.1+a749e0a9b）；
+想主动试当前 canary 用 `make refresh-base`，回收全部缓存（`work/` 约 1 GB）用 `make distclean`。
 
 ## 已知限制
 

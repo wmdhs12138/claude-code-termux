@@ -52,8 +52,12 @@ echo "building $LATEST (downloads ~250 MB, takes a few minutes)..."
 SKIP_RUN="${SKIP_RUN:-0}" bash "$ROOT/scripts/build.sh" "$LATEST"
 
 # refresh the installed launcher in case the template changed
+mkdir -p "$HOME/bin"
+# Escape the path before putting it through sed: an '&' or '|' in it would
+# otherwise silently produce a launcher pointing somewhere else.
+ROOT_ESC="$(printf '%s' "$ROOT" | sed 's/[&|\\]/\\&/g')"
 TMP="$HOME/bin/.claude.new.$$"
-sed "s|@ROOT@|$ROOT|g" "$ROOT/scripts/launcher.sh" > "$TMP"
+sed "s|@ROOT@|$ROOT_ESC|g" "$ROOT/scripts/launcher.sh" > "$TMP"
 chmod +x "$TMP"
 mv -f "$TMP" "$HOME/bin/claude"
 
