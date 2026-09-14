@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate GitHub release notes for claude-termux.
+"""Generate GitHub release notes for claude-code-termux.
 
 Both note types are CREDENTIALS ONLY. The project ships no binary: dist/claude
 is a modified copy of Anthropic's proprietary Claude Code, so a release can
@@ -63,8 +63,8 @@ def claude_notes(manifest, versions, toolchain):
 修改副本，本项目不分发；请在自己的设备上构建：
 
 ```bash
-git clone https://github.com/wmdhs12138/claude-termux.git
-cd claude-termux && make build
+git clone https://github.com/wmdhs12138/claude-code-termux.git
+cd claude-code-termux && make build
 sha256sum dist/claude
 ```
 

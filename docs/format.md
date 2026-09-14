@@ -1,6 +1,6 @@
 # Bun standalone `.bun` 节格式笔记
 
-本文记录 claude-termux 移植过程中逆向出的 Bun standalone 模块图格式（Bun ≥ 1.4 的
+本文记录 claude-code-termux 移植过程中逆向出的 Bun standalone 模块图格式（Bun ≥ 1.4 的
 "new section" 格式），以及嫁接手术的依据。所有结论都经过二进制实测；证据见
 `evidence/`。
 

@@ -1,4 +1,4 @@
-# claude-termux
+# claude-code-termux
 
 最新版 Claude Code 的原生 Termux 移植：**零 glibc、零 ptrace、零 proot**，单个 bionic ELF 直接 `execve`。
 
@@ -8,11 +8,11 @@
 
 ## 状态
 
-[![Claude Code](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fwmdhs12138%2Fclaude-termux%2Fmain%2Fversions.json&query=%24.claude&label=Claude%20Code&color=blue)](https://github.com/wmdhs12138/claude-termux/releases)
-[![build](https://github.com/wmdhs12138/claude-termux/actions/workflows/build.yml/badge.svg)](https://github.com/wmdhs12138/claude-termux/actions/workflows/build.yml)
+[![Claude Code](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fwmdhs12138%2Fclaude-code-termux%2Fmain%2Fversions.json&query=%24.claude&label=Claude%20Code&color=blue)](https://github.com/wmdhs12138/claude-code-termux/releases)
+[![build](https://github.com/wmdhs12138/claude-code-termux/actions/workflows/build.yml/badge.svg)](https://github.com/wmdhs12138/claude-code-termux/actions/workflows/build.yml)
 
 已在 Android 16 / aarch64 实机验证：对话往返、Bash / Read / Grep / find、TUI、`/exit` 干净退出。
-产物哈希与校验和见 [Releases](https://github.com/wmdhs12138/claude-termux/releases)。
+产物哈希与校验和见 [Releases](https://github.com/wmdhs12138/claude-code-termux/releases)。
 
 ## 原理
 
@@ -45,8 +45,8 @@ Android Bun canary (bionic ELF)  ──►  dist/claude   (单 ELF, 225 MB)
 Termux（F-Droid/GitHub 版）、aarch64、Android 9+（API 28+）、`pkg install python3 unzip curl ripgrep`。
 
 ```bash
-git clone https://github.com/wmdhs12138/claude-termux.git ~/claude-termux
-cd ~/claude-termux
+git clone https://github.com/wmdhs12138/claude-code-termux.git ~/claude-code-termux
+cd ~/claude-code-termux
 make build          # 下载官方二进制 + 校验 + 提取 + 嫁接 + 自检
 make install        # 安装到 ~/bin/claude（同名文件会被覆盖，先自行备份）
 claude              # TUI
