@@ -6,14 +6,14 @@
 
 ## 1. 定位
 
-官方 Claude Code 的 ELF 里有一个 `.bun` PROGBITS 节（Claude 2.1.269: 131,352,450 B）。
+官方 Claude Code 的 ELF 里有一个 `.bun` PROGBITS 节（Claude 2.1.270: 135,681,512 B）。
 新格式下：
 
 ```
 .bun section = [u64 payload_len][payload ...]
 ```
 
-`payload_len` 即 `section_size - 8`（实测 Claude 2.1.269 = 0x07d4477a）。
+`payload_len` 即 `section_size - 8`（实测 Claude 2.1.270 = 0x081655e0）。
 运行时并不通过 ELF 节表找它，而是：
 
 1. 符号 `BUN_COMPILED.size` 保存 payload 的**链接期虚拟地址**（unbiased vaddr）；
@@ -78,7 +78,8 @@ u32 flags;
 | 11 | **HAS_PRELINKED_MODULE_GRAPH**（1.4.3 新增） |
 | 12 | **HAS_RUNTIME_OPTIONS**（1.4.3 新增） |
 
-Claude 2.1.269：`flags = 0x1fff`（bit 0–12 全开），1864 个模块，`entry_point_id = 5`。
+Claude 2.1.270：`flags = 0x1fff`（bit 0–12 全开），1864 个模块，`entry_point_id = 5`
+（这三项与 2.1.269 完全一致，仅 payload 体积增长）。
 
 ## 3. 实测结论
 
@@ -126,7 +127,8 @@ find () { ... ( exec -a bfs   "$_cc_bin" -S dfs ... ) }
 
 1. 把 `function KKn(){return n().host.launchOptions.searchToolsOptIn()}` 替换为
    `function KKn(){return!0<pad>}`；
-2. 把 `KKn` 所在模块（`chunk-sfe3p9py.js`，约 100 KB）的 `bytecode`/`module_info`
+2. 把 `KKn` 所在模块（2.1.270: `chunk-74sfngb9.js`，约 100 KB；此文件名随版本变化，
+   `adapt_graph.py` 按函数体特征串定位，不写死模块名）的 `bytecode`/`module_info`
    StringPointer 清零，强制该模块从源码编译，使补丁生效（其余模块仍走字节码）。
 
 效果：`grep`/`find` 不再被遮蔽，Bash 使用 Termux 系统二进制；Grep 工具继续走

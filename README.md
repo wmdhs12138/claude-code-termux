@@ -10,9 +10,9 @@
 
 | 项 | 值 |
 |---|---|
-| Claude Code | 2.1.269 |
+| Claude Code | 2.1.270 |
 | 底座 | Bun 1.4.3-canary.1+a749e0a9b（官方 Android bionic 构建） |
-| 产物 | `dist/claude`，220,333,962 B，sha256 `ade71ad8…` |
+| 产物 | `dist/claude`，224,663,024 B，sha256 `b48d789b…` |
 | 验证设备 | Android 16 / aarch64 |
 | 已验证 | 对话往返、Bash / Read / Grep / find 工具、TUI、`/exit` 干净退出 |
 
@@ -26,10 +26,10 @@
 downloads.claude.ai/…/linux-arm64/claude   (glibc, Bun 1.4.3)
         │  tools/extract_graph.py   定位 .bun 节，取 [u64 len][graph]
         ▼
-claude-graph.bin   (1864 modules, 131 MB, 含源码)
+claude-graph.bin   (1864 modules, 136 MB, 含源码)
         │  tools/revive_patch.py    BUN_COMPILED.size + PT_LOAD 手术
         ▼
-Android Bun canary (bionic ELF)  ──►  dist/claude   (单 ELF, 220 MB)
+Android Bun canary (bionic ELF)  ──►  dist/claude   (单 ELF, 225 MB)
 ```
 
 - 模块图里的 1.4.3 字节码与底座版本不一致时，运行时会自动回退到内嵌源码（已实测验证）。

@@ -1,9 +1,9 @@
 {
-  "claude": "2.1.269",
-  "output_version": "2.1.269 (Claude Code)",
-  "output_sha256": "ade71ad82ea805a387491946267414cfd7b63d06e616ca425f25a4fdb2204936",
-  "output_size": 220333962,
-  "graph_sha256": "650f2f22460a36b199541c09aae3609b096092a9dcc1e26b784ead8797d12a07",
+  "claude": "2.1.270",
+  "output_version": "2.1.270 (Claude Code)",
+  "output_sha256": "b48d789bbe7a4770ac05040afeb99d220b941fc562c77297cbab59a6fa8f3c01",
+  "output_size": 224663024,
+  "graph_sha256": "4ea5bfb9d873211444a2935b3926c30395d33a75750219e4cd00fd87e78c4bd3",
   "adaptations": [
     "search_shadow"
   ],
@@ -11,5 +11,5 @@
     "version": "1.4.3-canary.1+a749e0a9b",
     "binary_sha256": "4c6a717da4dc1214ae008c76927e92e4bb18e5a7bdfcae2ba3fd0835cd1bb7e4"
   },
-  "built_at": "2026-09-12T09:07:18+00:00"
+  "built_at": "2026-09-14T02:32:58+00:00"
 }

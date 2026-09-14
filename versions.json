@@ -1,6 +1,6 @@
 {
-  "claude": "2.1.269",
-  "claude_linux_arm64_sha256": "4c84a33adc34c60d4de3acd43cfe7c64ba966591e51587c04867b8d589021be4",
+  "claude": "2.1.270",
+  "claude_linux_arm64_sha256": "7bf9f33acc124df9abccf6f2366397a82a740378d535fa12d426fa77fdbc9946",
   "base_bun": {
     "version": "1.4.3-canary.1+a749e0a9b",
     "url": "https://github.com/oven-sh/bun/releases/download/canary/bun-linux-aarch64-android.zip",
@@ -9,11 +9,11 @@
   },
   "verified_output": {
     "file": "dist/claude",
-    "sha256": "ade71ad82ea805a387491946267414cfd7b63d06e616ca425f25a4fdb2204936",
-    "size": 220333962,
-    "graph_sha256": "650f2f22460a36b199541c09aae3609b096092a9dcc1e26b784ead8797d12a07",
+    "sha256": "b48d789bbe7a4770ac05040afeb99d220b941fc562c77297cbab59a6fa8f3c01",
+    "size": 224663024,
+    "graph_sha256": "4ea5bfb9d873211444a2935b3926c30395d33a75750219e4cd00fd87e78c4bd3",
     "adaptations": ["search_shadow"],
     "device": "Android 16 / aarch64",
-    "verified_on": "2026-09-12"
+    "verified_on": "2026-09-14"
   }
 }
