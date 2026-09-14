@@ -1,14 +1,14 @@
 {
   "claude": "2.1.270",
   "output_version": "2.1.270 (Claude Code)",
-  "output_sha256": "b48d789bbe7a4770ac05040afeb99d220b941fc562c77297cbab59a6fa8f3c01",
-  "output_size": 224663024,
+  "output_sha256": "1615ae6784fd984dc32daf84398078147abc1720920cd7063890733c799d85ca",
+  "output_size": 224728560,
   "graph_sha256": "4ea5bfb9d873211444a2935b3926c30395d33a75750219e4cd00fd87e78c4bd3",
   "adaptations": [
     "search_shadow"
   ],
   "graft": {
-    "payload_vaddr": 88981504,
+    "payload_vaddr": 89047040,
     "payload_size": 135681504,
     "modules": 1864,
     "entry_point": 5,
@@ -16,8 +16,8 @@
     "trailer_ok": true
   },
   "base_bun": {
-    "version": "1.4.3-canary.1+a749e0a9b",
-    "binary_sha256": "4c6a717da4dc1214ae008c76927e92e4bb18e5a7bdfcae2ba3fd0835cd1bb7e4"
+    "version": "1.4.3-canary.1+86771d09f",
+    "binary_sha256": "b19adccd99599eb5a79bee723a811dcae2f349eb10ac5150bbb9413a4e5ad62f"
   },
-  "built_at": "2026-09-14T03:45:35+00:00"
+  "built_at": "2026-09-14T03:49:55+00:00"
 }

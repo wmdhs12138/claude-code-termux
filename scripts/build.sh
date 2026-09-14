@@ -40,12 +40,20 @@ if [ ! -x "$BUN" ]; then
 fi
 if [ "${SKIP_RUN:-0}" = "1" ]; then
   # x64 CI: cannot execute the aarch64 base, read the version string instead.
+  # Prefer the full revision form ("Bun v1.4.3-canary.1+86771d09f"): a bare
+  # "Bun v1.4.3" also occurs earlier in the binary, and taking the leftmost
+  # match would drop the canary identity that --revision reports on a device.
   BUN_VER="$(python3 - "$BUN" <<'PY'
 import re, sys
 d = open(sys.argv[1], 'rb').read()
-pat = rb'(?:bun-v|Bun v)(\d+\.\d+\.\d+(?:-canary[^\s"\\]*)?)'
-m = re.search(pat, d)
-print(m.group(1).decode() if m else 'unknown')
+for pat in (rb'(?:bun-v|Bun v)(\d+\.\d+\.\d+[-+][0-9A-Za-z.+\-]{2,})',
+            rb'(?:bun-v|Bun v)(\d+\.\d+\.\d+)'):
+    m = re.search(pat, d)
+    if m:
+        print(m.group(1).decode())
+        break
+else:
+    print('unknown')
 PY
 )"
 else

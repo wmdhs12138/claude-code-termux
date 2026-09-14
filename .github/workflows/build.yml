@@ -107,7 +107,12 @@ jobs:
           # toolchain. Putting it in the tag makes the version stateless: if the
           # bytes changed, no tag matches and a new release is cut; otherwise we
           # skip. Nothing to remember to bump, so it cannot drift.
-          TC_FP="$(find scripts tools -type f -print0 | sort -z \
+          #
+          # git ls-files, not find: find also picks up stray untracked files
+          # (__pycache__ and friends), so the same commit would hash differently
+          # on a machine that had run the tools. `make fingerprint` prints the
+          # same number locally.
+          TC_FP="$(git ls-files -z scripts tools | sort -z \
                     | xargs -0 sha256sum | sha256sum | cut -c1-7)"
           echo "fingerprint: $TC_FP"
 

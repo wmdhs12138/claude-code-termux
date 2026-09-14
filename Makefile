@@ -6,7 +6,7 @@ endif
 ROOT  := $(CURDIR)
 VERSION ?= latest
 
-.PHONY: build update fetch verify smoke install uninstall clean refresh-base distclean
+.PHONY: build update fetch verify smoke install uninstall clean refresh-base distclean fingerprint
 
 build:
 	bash scripts/build.sh $(VERSION)
@@ -38,6 +38,11 @@ uninstall:
 
 clean:
 	rm -f work/claude-graph.bin dist/claude
+
+# The same number CI puts in `toolchain-v<N>-<fingerprint>`: tracked files only,
+# so a stray __pycache__ cannot make it disagree with the published tag.
+fingerprint:
+	@git ls-files -z scripts tools | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-7
 
 # The base is a rolling canary tag, but work/ caches it, so a plain build never
 # notices that the tag moved. This drops the cache and rebuilds against the

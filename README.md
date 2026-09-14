@@ -110,7 +110,7 @@ release notes 区分 CI 结构校验（产物未被执行）与实机验证（�
 （`verified_on` 只代表本机跑通了 `--version`；CI 构建写 `null`）。
 
 底座是 Bun **canary** 滚动 tag，`work/` 会缓存它，所以本机不会自动跟着漂。`make build` 提示底座
-哈希漂移时，说明底座已换、图格式可能变了，需要重新适配（已验证 1.4.3-canary.1+a749e0a9b）；
+哈希漂移时，说明底座已换、图格式可能变了，需要重新适配（当前钉住的底座见 `versions.json`）；
 想主动试当前 canary 用 `make refresh-base`，回收全部缓存（`work/` 约 1 GB）用 `make distclean`。
 
 ## 已知限制
