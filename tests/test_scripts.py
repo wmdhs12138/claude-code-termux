@@ -58,7 +58,10 @@ class VersionValidationTests(unittest.TestCase):
                     {
                         "claude": "1.2.3",
                         "claude_linux_arm64_sha256": "0" * 64,
-                        "base_bun": {"binary_sha256": bun_sha},
+                        "base_bun": {
+                            "archive_sha256": "2" * 64,
+                            "binary_sha256": bun_sha,
+                        },
                     }
                 )
             )
@@ -71,6 +74,13 @@ class VersionValidationTests(unittest.TestCase):
             )
             self.assertNotEqual(proc.returncode, 0)
             self.assertEqual(bun.read_bytes(), b"known-good-bun")
+
+    def test_default_bun_dependency_is_immutable_and_fully_locked(self):
+        versions = json.loads((ROOT / "versions.json").read_text())
+        base = versions["base_bun"]
+        self.assertNotIn("/download/canary/", base["url"])
+        self.assertRegex(base["archive_sha256"], r"^[0-9a-f]{64}$")
+        self.assertRegex(base["binary_sha256"], r"^[0-9a-f]{64}$")
 
     def test_standalone_fetch_respects_build_lock(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -102,7 +112,10 @@ class VersionValidationTests(unittest.TestCase):
                 {
                     "claude": "1.2.3",
                     "claude_linux_arm64_sha256": "0" * 64,
-                    "base_bun": {"binary_sha256": "1" * 64},
+                    "base_bun": {
+                        "archive_sha256": "2" * 64,
+                        "binary_sha256": "1" * 64,
+                    },
                 }
             )
             files = (

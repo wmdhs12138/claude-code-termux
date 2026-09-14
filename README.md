@@ -26,7 +26,7 @@ downloads.claude.ai/…/linux-arm64/claude   (glibc, Bun 1.4.3)
 claude-graph.bin   (~1864 modules, ~136 MB, 含源码)
         │  tools/revive_patch.py    BUN_COMPILED.size + PT_LOAD 手术
         ▼
-Android Bun canary (bionic ELF)  ──►  dist/claude   (单 ELF, 225 MB)
+Pinned Android Bun (bionic ELF)  ──►  dist/claude   (单 ELF, 225 MB)
 ```
 
 模块图里的字节码与底座版本不符时，运行时会自动回退到内嵌源码。格式细节见 [docs/format.md](docs/format.md)。
@@ -103,30 +103,31 @@ aarch64 产物，这是唯一能自动把关的地方；实机验证仍靠 `make
 指纹是 `scripts/` + `tools/` + `.github/`（含发布 note 的生成器）全部内容的 sha256 前 7 位，
 直接写进 tag，所以编号不会与代码漂移；`make fingerprint` 本地可复算，应与 tag 后缀一致。
 release notes 区分 CI 结构校验（产物未被执行）与实机验证（见 `versions.json`）：两者 sha256 一致时
-说"可复现"，不一致时提示底座 canary 漂移。需要产物请自己 `make build`。
+说"可复现"；固定输入下若不一致则明确警告。需要产物请自己 `make build`。
 
-## 版本锁定与底座漂移
+## 版本与底座锁定
 
-`versions.json` 锁 Claude 版本、官方 sha256、底座 Bun revision、产物 sha256，每次成功构建后自动刷新
-（`verified_on` 只代表本机跑通了 `--version`；CI 构建写 `null`）。对已记录的 Claude 版本，下载内容
-必须与锁定 sha256 一致，否则构建会在替换现有产物前失败。
+`versions.json` 同时锁定 Claude 官方 sha256、底座 Bun revision、下载包 sha256、解压后二进制
+sha256 和最终产物 sha256。底座下载地址指向本仓库的**不可变版本化镜像 release**，不会再因
+upstream 的滚动 `canary` tag 原地换包而让定时构建随机失败。镜像只包含 MIT 许可的 Bun Android
+运行时，不包含 Claude Code。
 
-底座是 Bun **canary** 滚动 tag，`work/` 会缓存它，所以本机不会自动跟着漂。普通 `make build` 会
-严格核对当前底座与 `versions.json`：哈希漂移时直接停止，避免悄悄接受变化。想主动下载、验证并在
-成功后接受当前 canary，使用 `make refresh-base`；回收全部缓存（`work/` 约 1 GB）用
-`make distclean`。
+普通 `make build` 会严格核对全部哈希，不一致时在替换现有产物前停止。评估新版 Bun 时，显式传入
+upstream URL 并运行 `BUN_URL=<url> make refresh-base`；只有 Android 实机构建和验证全部成功后
+才会更新锁文件。回收全部缓存（`work/` 约 1 GB）使用 `make distclean`。
 
 ## 已知限制
 
-- 底座 canary 滚动，Bun 改图格式后需跟进适配。
+- Claude 模块图当前要求 Bun ≥ 1.4.3 的格式；升级底座前必须重新做实机兼容性验证。
 - 内嵌 ripgrep / 自动更新不可用（launcher 已绕过）。
 - 产物 225 MB，未压缩；如需可自行 UPX。
 - 未在 Android 9 以下、非 aarch64 设备验证。
 
 ## 法律
 
-本项目只含工具链，不含任何 Anthropic 代码；`make build` 从官方 CDN 下载并在本地处理。Claude Code
-是 Anthropic 的闭源产品，请遵守其服务条款；产物**仅供个人研究使用，请勿再分发**。
+源码树只含工具链，不含任何 Anthropic 代码；`make build` 从官方 CDN 下载并在本地处理。基础依赖
+镜像仅包含 MIT 许可的 Bun Android 运行时。Claude Code 是 Anthropic 的闭源产品，请遵守其服务
+条款；嫁接产物**仅供个人研究使用，请勿再分发**。
 
 ## 致谢
 

@@ -49,9 +49,9 @@ clean:
 fingerprint:
 	@git ls-files -z scripts tools .github | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-7
 
-# The base is a rolling canary tag, but work/ caches it, so a plain build never
-# notices that the tag moved. This drops the cache and rebuilds against the
-# current one -- the way to find out whether a new canary still grafts.
+# The default base comes from an immutable mirrored release, so plain builds
+# stay reproducible. To evaluate another upstream Bun, pass BUN_URL explicitly;
+# refresh downloads and promotes it only after every build check passes.
 refresh-base:
 	REFRESH_BASE=1 bash scripts/build.sh $(VERSION)
 

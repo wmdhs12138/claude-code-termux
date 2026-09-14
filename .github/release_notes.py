@@ -36,9 +36,8 @@ def claude_notes(manifest, versions, toolchain):
     verified_on = vo.get("verified_on") if v.get("claude") == ver else None
 
     # Only claim reproducibility when the CI build and the device build actually
-    # produced the same bytes. A canary Bun roll makes them differ, and saying
-    # "hashes match" without checking would be exactly the kind of stale claim
-    # this file exists to avoid.
+    # produced the same bytes. Saying "hashes match" without checking would be
+    # exactly the kind of stale claim this file exists to avoid.
     ci_sha, dev_sha = m.get("output_sha256"), vo.get("sha256")
     # Facts verify_graft.py checked about this artifact. Absent for manifests
     # built before that check existed, hence the dash instead of a fake value.
@@ -57,7 +56,7 @@ def claude_notes(manifest, versions, toolchain):
         device_line = (
             f"⚠️ 维护者实机验证过 **{ver}**（{verified_on}，{device}），但**哈希与本 release 的 CI 构建不同**："
             f"实机 `{short(dev_sha)}` vs CI `{short(ci_sha)}`。"
-            "这几乎总是底座 Bun canary 已漂移（见下方「复现注意」），而不是移植本身的问题。"
+            "固定输入下不应出现这种情况，请核对版本锁、工具链和构建环境。"
         )
     else:
         device_line = (
@@ -84,7 +83,9 @@ sha256sum dist/claude
 | 产物 sha256 | `{m.get("output_sha256", "?")}` |
 | 产物大小 | {m.get("output_size", 0):,} B |
 | 模块图 sha256 | `{m.get("graph_sha256", "?")}` |
-| 底座 Bun | `{bun.get("version", "?")}`（`{short(bun.get("binary_sha256"))}`） |
+| 底座 Bun | `{bun.get("version", "?")}` |
+| Bun 下载包 sha256 | `{bun.get("archive_sha256", "?")}` |
+| Bun 二进制 sha256 | `{bun.get("binary_sha256", "?")}` |
 | 工具链 | `{toolchain}` |
 | 适配 | {", ".join(m.get("adaptations") or []) or "—"} |
 | Graft 结构自检 | {graft_cell} |
@@ -99,9 +100,9 @@ graft 闭环（`.bun` size 字段 → payload 长度 → trailer → 模块表�
 
 ## 复现注意
 
-底座是 Bun **canary** 滚动 tag。普通 `make build` 会严格核对上表钉住的 Bun 哈希，若 tag
-已经漂移则在替换现有产物前停止。只有显式执行 `make refresh-base` 才会下载、验证并在成功后
-接受新的底座哈希。
+底座来自版本化的不可变镜像 release；下载包和解压后二进制均有 sha256 锁。普通 `make build`
+不会追随 upstream 滚动 tag。只有维护者显式指定新版 `BUN_URL` 并执行 `make refresh-base`，
+通过 Android 实机验证后才会更新底座。
 """
 
 

@@ -3,12 +3,12 @@
 # Android (bionic) Bun ELF. Zero glibc, no ptrace, no proot.
 #
 # Usage: build.sh [VERSION|latest]
-# Env:   BUN_URL  override the Android Bun base (default: Bun canary aarch64-android)
+# Env:   BUN_URL  override the pinned Android Bun base
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="${1:-latest}"
-BUN_URL="${BUN_URL:-https://github.com/oven-sh/bun/releases/download/canary/bun-linux-aarch64-android.zip}"
+BUN_URL="${BUN_URL:-https://github.com/wmdhs12138/claude-code-termux/releases/download/bun-base-1.4.3-canary.1-5fce36ebb/bun-linux-aarch64-android.zip}"
 REFRESH_BASE="${REFRESH_BASE:-0}"
 WORK="$ROOT/work"
 DIST="$ROOT/dist"
@@ -52,7 +52,7 @@ fi
 
 # The checked-in lock is a security boundary, not optional build metadata.
 # Refuse malformed/missing values instead of silently replacing them later.
-read -r PINNED_CLAUDE_VER PINNED_CLAUDE_SHA PINNED_BUN_SHA < <(
+read -r PINNED_CLAUDE_VER PINNED_CLAUDE_SHA PINNED_BUN_ARCHIVE_SHA PINNED_BUN_SHA < <(
   python3 - "$ROOT/versions.json" <<'PY'
 import json, re, sys
 try:
@@ -60,15 +60,17 @@ try:
         doc = json.load(f)
     claude = doc["claude"]
     claude_sha = doc["claude_linux_arm64_sha256"]
+    bun_archive_sha = doc["base_bun"]["archive_sha256"]
     bun_sha = doc["base_bun"]["binary_sha256"]
 except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
     raise SystemExit(f"invalid versions.json: {exc}") from None
 if not isinstance(claude, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", claude):
     raise SystemExit("versions.json has an invalid Claude version")
-for name, value in (("Claude", claude_sha), ("Bun", bun_sha)):
+for name, value in (("Claude", claude_sha), ("Bun archive", bun_archive_sha),
+                    ("Bun binary", bun_sha)):
     if not isinstance(value, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", value):
         raise SystemExit(f"versions.json has an invalid {name} sha256")
-print(claude, claude_sha.lower(), bun_sha.lower())
+print(claude, claude_sha.lower(), bun_archive_sha.lower(), bun_sha.lower())
 PY
 )
 
@@ -104,6 +106,7 @@ else
   BUN_ZIP="$CANONICAL_BUN_ZIP"
 fi
 BASE_DOWNLOADED_THIS_RUN=0
+BUN_ARCHIVE_SHA="$PINNED_BUN_ARCHIVE_SHA"
 BASE_SWAPPED=0
 BASE_HAD_OLD=0
 PROMOTION_STARTED=0
@@ -176,6 +179,11 @@ BUN="$BUN_DIR/bun"
 if [ ! -x "$BUN" ]; then
   echo "build: fetching Android Bun base..." >&2
   curl -fL --retry 3 -o "$BUN_ZIP" "$BUN_URL"
+  BUN_ARCHIVE_SHA="$(sha256sum "$BUN_ZIP" | cut -d' ' -f1)"
+  if [ "$BUN_ARCHIVE_SHA" != "$PINNED_BUN_ARCHIVE_SHA" ] \
+     && [ "$REFRESH_BASE" != "1" ]; then
+    fail_before_promote "base Bun archive hash differs from versions.json (expected $PINNED_BUN_ARCHIVE_SHA, got $BUN_ARCHIVE_SHA)"
+  fi
   rm -rf "$BUN_DIR" "$BUN_ZIP.d"
   mkdir -p "$BUN_DIR"
   unzip -o -j "$BUN_ZIP" "*/bun" -d "$BUN_DIR" >/dev/null
@@ -260,10 +268,11 @@ OUT_SHA="$(sha256sum "$CANDIDATE" | cut -d' ' -f1)"
 OUT_SIZE="$(stat -c%s "$CANDIDATE")"
 GRAPH_SHA="$(sha256sum "$GRAPH_ADAPTED" | cut -d' ' -f1)"
 python3 - "$MANIFEST_NEW" "$VER" "$CLAUDE_SHA" "$OUT_VER" "$OUT_SHA" "$OUT_SIZE" \
-        "$BUN_VER" "$BUN_SHA" "$GRAPH_SHA" "$WORK/adapt-report.json" "$WORK/verify-graft.json" <<'PY'
+        "$BUN_VER" "$BUN_ARCHIVE_SHA" "$BUN_SHA" "$BUN_URL" "$GRAPH_SHA" \
+        "$WORK/adapt-report.json" "$WORK/verify-graft.json" <<'PY'
 import json, sys, datetime
-(path, ver, claude_sha, out_ver, out_sha, out_size, bun_ver, bun_sha, graph_sha,
- adapt_path, graft_path) = sys.argv[1:12]
+(path, ver, claude_sha, out_ver, out_sha, out_size, bun_ver, bun_archive_sha,
+ bun_sha, bun_url, graph_sha, adapt_path, graft_path) = sys.argv[1:14]
 def load(p):
     with open(p) as f:
         return json.load(f)
@@ -279,7 +288,12 @@ doc = {
     "adaptations": load(adapt_path)["adaptations"],
     # What the structural check verified about this exact artifact (step 5).
     "graft": load(graft_path),
-    "base_bun": {"version": bun_ver, "binary_sha256": bun_sha},
+    "base_bun": {
+        "version": bun_ver,
+        "url": bun_url,
+        "archive_sha256": bun_archive_sha,
+        "binary_sha256": bun_sha,
+    },
     "built_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
 }
 with open(path, "w") as f:
@@ -298,13 +312,13 @@ if [ "${SKIP_RUN:-0}" != "1" ]; then
   if [ -n "$REL" ]; then DEVICE="Android $REL / $ARCH"; else DEVICE="$(uname -s) / $ARCH"; fi
   VERIFIED_ON="$(date -u +%Y-%m-%d)"
 fi
-python3 - "$ROOT/versions.json" "$VERSIONS_NEW" "$VER" "$CLAUDE_SHA" "$BUN_VER" "$BUN_SHA" \
-        "$OUT_SHA" "$OUT_SIZE" "$GRAPH_SHA" "$DEVICE" "$VERIFIED_ON" "$BUN_URL" \
-        "$WORK/adapt-report.json" <<'PY'
+python3 - "$ROOT/versions.json" "$VERSIONS_NEW" "$VER" "$CLAUDE_SHA" "$BUN_VER" \
+        "$BUN_ARCHIVE_SHA" "$BUN_SHA" "$OUT_SHA" "$OUT_SIZE" "$GRAPH_SHA" "$DEVICE" \
+        "$VERIFIED_ON" "$BUN_URL" "$WORK/adapt-report.json" <<'PY'
 import json, sys
-(source_path, path, ver, claude_sha, bun_ver, bun_sha,
+(source_path, path, ver, claude_sha, bun_ver, bun_archive_sha, bun_sha,
  out_sha, out_size, graph_sha, device, verified_on, bun_url,
- adapt_path) = sys.argv[1:14]
+ adapt_path) = sys.argv[1:15]
 try:
     doc = json.load(open(source_path))
 except (OSError, ValueError):
@@ -313,9 +327,10 @@ doc["claude"] = ver
 doc["claude_linux_arm64_sha256"] = claude_sha
 bun = doc.setdefault("base_bun", {})
 bun["version"] = bun_ver
+bun["archive_sha256"] = bun_archive_sha
 bun["binary_sha256"] = bun_sha
 bun["url"] = bun_url
-bun.setdefault("note", "rolling canary tag; if the extracted binary hash drifts, the graph format may have changed")
+bun["note"] = "immutable mirrored release; update only after Android build and smoke verification"
 doc["verified_output"] = {
     "file": "dist/claude",
     "sha256": out_sha,
