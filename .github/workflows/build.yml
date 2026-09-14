@@ -1,9 +1,16 @@
 name: build
 
-# Toolchain CI: builds the grafted bionic ELF and verifies the pipeline.
-# Deliberately does NOT publish or upload the binary: it is a modified copy
-# of Anthropic's proprietary Claude Code and must not be redistributed.
-# Only build reports (hashes / offsets) are uploaded.
+# Two jobs, split so that "we never publish the binary" is structural rather
+# than a promise:
+#
+#   build   -- contents: read. Builds, structurally verifies, uploads text
+#              reports. Has no ability to publish anything, even by accident.
+#   release -- contents: write. Downloads those reports and cuts releases that
+#              carry CREDENTIALS ONLY (hashes / offsets / toolchain tag).
+#
+# dist/claude is a modified copy of Anthropic's proprietary Claude Code and
+# must not be redistributed. The release job refuses any asset over 1 MiB,
+# which the 224 MB artifact would trip instantly.
 
 on:
   workflow_dispatch:
@@ -21,8 +28,31 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      version: ${{ steps.latest.outputs.version }}
+      unreleased: ${{ steps.latest.outputs.unreleased }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # tags tell us what is already released
+
+      - name: Resolve latest Claude Code version
+        id: latest
+        run: |
+          set -euo pipefail
+          V="$(curl -fsSL --max-time 30 https://downloads.claude.ai/claude-code-releases/latest)"
+          case "$V" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::bad version '$V'"; exit 1 ;;
+          esac
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          if git tag -l | grep -qx "v$V"; then
+            echo "unreleased=false" >> "$GITHUB_OUTPUT"
+            echo "v$V already has a release"
+          else
+            echo "unreleased=true" >> "$GITHUB_OUTPUT"
+            echo "v$V is unreleased"
+          fi
 
       - name: Build and verify (no execution on x64)
         env:
@@ -32,10 +62,10 @@ jobs:
       - name: Show build manifest
         run: cat dist/build-manifest.json
 
-      - name: Upload manifest and reports (no binary)
+      - name: Upload reports (no binary)
         uses: actions/upload-artifact@v4
         with:
-          name: build-manifest-${{ github.run_id }}
+          name: build-reports
           path: |
             dist/build-manifest.json
             work/extract-report.json
@@ -43,3 +73,95 @@ jobs:
             work/revive-report.log
           retention-days: 7
           if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.build.outputs.version }}
+      UNRELEASED: ${{ needs.build.outputs.unreleased }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-reports
+          path: reports
+
+      - name: Cut toolchain release if scripts/ or tools/ changed
+        id: toolchain
+        run: |
+          set -euo pipefail
+
+          # Fingerprint = sha256 over the sorted per-file sha256 of the whole
+          # toolchain. Putting it in the tag makes the version stateless: if the
+          # bytes changed, no tag matches and a new release is cut; otherwise we
+          # skip. Nothing to remember to bump, so it cannot drift.
+          TC_FP="$(find scripts tools -type f -print0 | sort -z \
+                    | xargs -0 sha256sum | sha256sum | cut -c1-7)"
+          echo "fingerprint: $TC_FP"
+
+          TC_TAG="$(git tag -l "toolchain-v*-$TC_FP" | head -1)"
+          if [ -n "$TC_TAG" ]; then
+            echo "already released as $TC_TAG"
+          else
+            N="$(git tag -l 'toolchain-v*' \
+                 | sed -n 's|^toolchain-v\([0-9]*\)-.*|\1|p' | sort -n | tail -1)"
+            N=$(( ${N:-0} + 1 ))
+            PREV="$(git tag -l 'toolchain-v*' | sort -V | tail -1)"
+            PREV="${PREV:--}"
+            TC_TAG="toolchain-v$N-$TC_FP"
+
+            if [ "$PREV" != "-" ]; then
+              git log --oneline --no-decorate "$PREV..HEAD" -- scripts tools > changelog.txt
+            else
+              git log --oneline --no-decorate -20 -- scripts tools > changelog.txt
+            fi
+            RELEASED="$(git tag -l 'v*' \
+                        | sed -n 's|^v\([0-9][0-9.]*\)$|\1|p' | sort -V | paste -sd, -)"
+
+            python3 .github/release_notes.py toolchain tc-notes.md \
+              --toolchain "$TC_TAG" --fingerprint "$TC_FP" \
+              --predecessor "$PREV" --changelog changelog.txt --released "$RELEASED"
+
+            gh release create "$TC_TAG" --title "工具链 v$N ($TC_FP)" \
+              --notes-file tc-notes.md
+            echo "released $TC_TAG"
+          fi
+
+          echo "tag=$TC_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Cut Claude Code release if the version is new
+        if: needs.build.outputs.unreleased == 'true'
+        run: |
+          set -euo pipefail
+
+          python3 .github/release_notes.py claude claude-notes.md \
+            --manifest reports/dist/build-manifest.json \
+            --versions versions.json \
+            --toolchain "${{ steps.toolchain.outputs.tag }}"
+
+          # Credentials only. Every asset must be small text; the guard is what
+          # keeps a future edit from quietly attaching dist/claude (224 MB).
+          ASSETS="reports/dist/build-manifest.json
+          reports/work/extract-report.json
+          reports/work/adapt-report.log
+          reports/work/revive-report.log"
+          for f in $ASSETS; do
+            [ -f "$f" ] || { echo "::error::missing asset $f"; exit 1; }
+            sz="$(stat -c%s "$f")"
+            if [ "$sz" -gt 1048576 ]; then
+              echo "::error::$f is $sz bytes; releases carry credentials, not binaries"
+              exit 1
+            fi
+          done
+
+          gh release create "v$VERSION" --title "Claude Code $VERSION · Termux" \
+            --notes-file claude-notes.md $ASSETS
+          echo "released v$VERSION"

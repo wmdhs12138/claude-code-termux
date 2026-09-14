@@ -116,15 +116,39 @@ tools/
   tui_smoke.py            PTY TUI 冒烟测试
 docs/format.md            .bun 节格式逆向笔记
 evidence/                 构建与验证日志
-.github/workflows/        CI：构建 + 结构校验（不发布产物）
+.github/
+  workflows/build.yml     CI：构建 + 结构校验 + 发布构建凭证（不含二进制）
+  release_notes.py        release notes 生成（凭证表格 / 工具链能力）
 ```
 
-## CI
+## CI 与 Release
 
-`.github/workflows/build.yml` 每天定时 + 手动触发：在 x64 runner 上跑完整管线并做
-ELF/aarch64 结构校验（`SKIP_RUN=1`，runner 跑不了 bionic 产物），只上传构建指纹和日志。
+`.github/workflows/build.yml` 每天定时 + 手动触发，拆成两个 job：
 
-**CI 不构建 Release、不上传二进制**：产物是 Anthropic 专有代码的修改副本，上传即分发。
+- **`build`**（`contents: read`）：x64 runner 上跑完整管线并做 ELF/aarch64 结构校验
+  （`SKIP_RUN=1`，runner 跑不了 bionic 产物），上传构建指纹和日志。
+  **这个 job 完全没有发布权限** —— "不发二进制"是结构上的保证，不是靠自觉。
+- **`release`**（`contents: write`）：只下载上面那几个文本报告，发布两类 release。
+
+**Release 永远不含二进制。** 产物是 Anthropic 专有代码的修改副本，上传即分发。
+`release` job 有一道硬闸：任何超过 1 MiB 的 asset 直接报错退出（224 MB 的产物一放就炸）。
+
+### 两类 release
+
+| tag | 触发条件 | 内容 |
+|---|---|---|
+| `v<claude 版本>`，如 `v2.1.270` | 官方 `latest` 变了且该 tag 不存在 | 官方校验和、产物 sha256、图 sha256、底座 Bun 哈希、复现命令 + 4 个文本报告 |
+| `toolchain-v<N>-<指纹>`，如 `toolchain-v2-3797455` | `scripts/` + `tools/` 的内容指纹变了 | 工具链能力、格式兼容范围、自上一个工具链版本的提交列表 |
+
+工具链指纹是 `scripts/` 与 `tools/` 全部文件内容的 sha256 前 7 位，**直接写进 tag**。
+所以编号不可能与实际代码漂移：字节变了就没有 tag 能匹配，自动切下一个号，不需要手工 bump。
+
+### 验证范围
+
+release notes 会区分两种数据：CI 的结构校验（产物**没有被执行过**，x64 runner 跑不了
+bionic aarch64）和维护者的实机验证（记录在 `versions.json`）。两者的产物 sha256 一致时，
+notes 会明说"构建可复现"；不一致时会提示大概率是底座 Bun canary 漂移。
+
 需要产物请在自己的设备上 `make build`。
 
 ## 版本锁定与底座漂移
