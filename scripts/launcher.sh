@@ -10,8 +10,14 @@ set -euo pipefail
 # it later would make those two silently ineffective when set there.
 ENV_FILE="${CLAUDE_CODE_TERMUX_ENV:-$HOME/.config/claude-code/env.sh}"
 if [ -r "$ENV_FILE" ]; then
+  # The file is user configuration, written in loose shell. Under `set -u` a
+  # perfectly ordinary line like `export ANTHROPIC_AUTH_TOKEN="$TOKEN"` (with
+  # TOKEN unset) would kill the launcher outright. Relax -u while sourcing it
+  # and keep -e, so a genuinely broken file still stops us loudly.
+  set +u
   # shellcheck disable=SC1090
   . "$ENV_FILE"
+  set -u
 fi
 
 ROOT="${CLAUDE_CODE_TERMUX_ROOT:-@ROOT@}"
