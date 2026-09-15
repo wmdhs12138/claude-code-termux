@@ -54,6 +54,11 @@ ABI（`segment` / `paint` / `setCell` 及 `graphemes`/`sgrKeys`/`uris` 池），
 注意：只有走 launcher（`claude`）才会带上 preload，直接执行 `dist/claude` 需要自己设置
 `BUN_OPTIONS`。
 
+接口是私有的、没有上游变更日志，所以构建期有防漂移闸门：`tools/check_native_abi.py` 扫描
+模块图里实际用到的 `Bun.ant.*` 和 `CellSegmenter` 原生成员，与 polyfill 的 ABI 白名单比对，
+新增/缺失/改名都会让 `make build` 在嫁接前失败，结果写进 `native-abi.json` 并随 release 凭证
+一起发布。
+
 ## 快速开始
 
 Termux（F-Droid/GitHub 版）、aarch64、Android 9+（API 28+）、`pkg install python3 unzip curl ripgrep util-linux`。
@@ -98,6 +103,7 @@ scripts/                  fetch-claude.sh · build.sh · update.sh · launcher.s
 tools/                    extract_graph.py · adapt_graph.py · verify_graft.py
                           revive_patch.py · bunsec.py / graph.py · tui_smoke.py
                           cellsegmenter-polyfill.js（运行时注入，见上）
+                          check_native_abi.py（构建期 ABI 防漂移，见上）
 docs/format.md            .bun 节格式逆向笔记
 evidence/                 构建与验证日志
 .github/                  workflows/build.yml · release_notes.py

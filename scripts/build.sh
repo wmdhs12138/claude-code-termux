@@ -226,6 +226,15 @@ GRAPH="$WORK/claude-graph.bin"
 python3 "$ROOT/tools/extract_graph.py" "$CLAUDE_BIN" "$GRAPH" > "$WORK/extract-report.json"
 echo "build: graph extracted ($(stat -c%s "$GRAPH") bytes)" >&2
 
+# 3a. Native Ink ABI guard: tools/cellsegmenter-polyfill.js is written against
+#     the Bun.ant.CellSegmenter member surface this graph uses. A drift turns
+#     into a blank terminal at the user's first launch, so fail here instead;
+#     the candidate is not grafted and dist/claude stays untouched.
+if ! python3 "$ROOT/tools/check_native_abi.py" "$GRAPH" --report "$WORK/native-abi.json" > "$WORK/native-abi.log" 2>&1; then
+  fail_before_promote "$(tail -1 "$WORK/native-abi.log")"
+fi
+echo "build: $(head -1 "$WORK/native-abi.log")" >&2
+
 # 3b. Termux adaptations (disable native bfs/ugrep shell shadowing, etc.)
 GRAPH_ADAPTED="$WORK/claude-graph-adapted.bin"
 python3 "$ROOT/tools/adapt_graph.py" "$GRAPH" "$GRAPH_ADAPTED" --report "$WORK/adapt-report.json" > "$WORK/adapt-report.log"
@@ -269,10 +278,10 @@ OUT_SIZE="$(stat -c%s "$CANDIDATE")"
 GRAPH_SHA="$(sha256sum "$GRAPH_ADAPTED" | cut -d' ' -f1)"
 python3 - "$MANIFEST_NEW" "$VER" "$CLAUDE_SHA" "$OUT_VER" "$OUT_SHA" "$OUT_SIZE" \
         "$BUN_VER" "$BUN_ARCHIVE_SHA" "$BUN_SHA" "$BUN_URL" "$GRAPH_SHA" \
-        "$WORK/adapt-report.json" "$WORK/verify-graft.json" <<'PY'
+        "$WORK/adapt-report.json" "$WORK/verify-graft.json" "$WORK/native-abi.json" <<'PY'
 import json, sys, datetime
 (path, ver, claude_sha, out_ver, out_sha, out_size, bun_ver, bun_archive_sha,
- bun_sha, bun_url, graph_sha, adapt_path, graft_path) = sys.argv[1:14]
+ bun_sha, bun_url, graph_sha, adapt_path, graft_path, abi_path) = sys.argv[1:15]
 def load(p):
     with open(p) as f:
         return json.load(f)
@@ -288,6 +297,9 @@ doc = {
     "adaptations": load(adapt_path)["adaptations"],
     # What the structural check verified about this exact artifact (step 5).
     "graft": load(graft_path),
+    # The native Ink surface this graph used and the polyfill was checked
+    # against (step 3a), so an ABI change is visible in the release credential.
+    "native_abi": load(abi_path),
     "base_bun": {
         "version": bun_ver,
         "url": bun_url,
