@@ -37,8 +37,9 @@ Pinned Android Bun (bionic ELF)  ──►  dist/claude   (单 ELF, 225 MB)
 会话注入 `find`/`grep` shell 函数，把调用重定向回 CLI 二进制。嫁接产物没有 prelude，这些函数会以
 `-G` 调用普通 CLI 并报 `unknown option '-G'`。
 
-`tools/adapt_graph.py` 把该开关的唯一读取点 `KKn()` 改成返回 true，并让其所在模块强制源码编译，
-`find`/`grep` 即回退 Termux 系统二进制。只影响 shell 快照生成，启动开销可忽略。
+`tools/adapt_graph.py` 按 `searchToolsOptIn()` 读取行为定位该开关（不依赖每版会变化的压缩函数名），
+把它改成返回 true，并让所在模块强制源码编译；`find`/`grep` 即回退 Termux 系统二进制。只影响
+shell 快照生成，启动开销可忽略。
 
 ## 快速开始
 

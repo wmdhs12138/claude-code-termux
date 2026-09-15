@@ -150,6 +150,28 @@ class VersionValidationTests(unittest.TestCase):
             self.assertFalse((root / ".promotion-in-progress").exists())
 
 
+class GraphAdaptationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        path = ROOT / "tools" / "adapt_graph.py"
+        spec = importlib.util.spec_from_file_location("adapt_graph", path)
+        cls.module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.module)
+
+    def test_matches_search_opt_in_getter_across_minified_names(self):
+        for getter in (
+            b"function KKn(){return n().host.launchOptions.searchToolsOptIn()}",
+            b"function $Xn(){return n().host.launchOptions.searchToolsOptIn()}",
+        ):
+            matches = list(self.module.SEARCH_OPT_IN_GETTER.finditer(getter))
+            self.assertEqual(len(matches), 1)
+            self.assertEqual(matches[0].group(0), getter)
+
+    def test_does_not_match_unrelated_search_tools_text(self):
+        data = b"searchToolsOptIn(){return this.#C}"
+        self.assertEqual(list(self.module.SEARCH_OPT_IN_GETTER.finditer(data)), [])
+
+
 class UpdateRecoveryTests(unittest.TestCase):
     def test_broken_binary_is_rebuilt(self):
         with tempfile.TemporaryDirectory() as tmp:

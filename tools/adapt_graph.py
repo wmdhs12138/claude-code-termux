@@ -8,9 +8,10 @@ Adaptation: search_shadow
   (multi-call). A bionic graft has no native prelude, so those functions call
   the normal CLI with `-G` and fail with "error: unknown option '-G'".
 
-  Fix: patch KKn() (the only caller is the Qb() gate) to return true, which
-  disables the shadowing so system find/grep are used, and force its module to
-  compile from source (zero its bytecode pointer) so the patch takes effect.
+  Fix: locate the semantic getter for searchToolsOptIn() (minified function
+  names change between Claude releases), patch it to return true, and force its
+  module to compile from source (zero its bytecode pointer) so the patch takes
+  effect.
 
 Usage: adapt_graph.py <graph.bin> <out.bin> [--report report.json]
 
@@ -18,16 +19,15 @@ Usage: adapt_graph.py <graph.bin> <out.bin> [--report report.json]
 build manifest and release notes can name the adaptations from the run itself
 instead of keeping a hardcoded list in sync by hand.
 """
-import json, struct, sys
+import json, re, struct, sys
 
-OLD_KKN = b'function KKn(){return n().host.launchOptions.searchToolsOptIn()}'
-NEW_BODY = b'function KKn(){return!0'
-if len(NEW_BODY) > len(OLD_KKN):
-    # The patch is length-preserving on purpose. A longer body would push every
-    # following byte along, quietly invalidating offsets across the whole graph.
-    # Not an assert: `python3 -O` drops those, and this one guards corruption.
-    raise SystemExit(f'new body ({len(NEW_BODY)}B) is longer than the original '
-                     f'({len(OLD_KKN)}B); patching in place would shift the graph')
+# Match behavior rather than a minified symbol such as KKn/$Xn. Those names are
+# not API and changed in Claude Code 2.1.272 even though the getter did not.
+SEARCH_OPT_IN_GETTER = re.compile(
+    rb'function (?P<fn>[A-Za-z_$][A-Za-z0-9_$]*)\(\)\{return '
+    rb'[A-Za-z_$][A-Za-z0-9_$]*\(\)\.host\.launchOptions\.'
+    rb'searchToolsOptIn\(\)\}'
+)
 
 def make_replacement(old: bytes, new_body: bytes) -> bytes:
     pad = len(old) - len(new_body) - 1
@@ -56,20 +56,22 @@ def main():
     if byte_count != n - 48:
         raise SystemExit('byte_count mismatch')
 
-    new_fn = make_replacement(OLD_KKN, NEW_BODY)
-    hits = []
-    start = 0
-    while True:
-        i = data.find(OLD_KKN, start)
-        if i < 0:
-            break
-        hits.append(i)
-        data[i:i + len(OLD_KKN)] = new_fn
-        start = i + len(OLD_KKN)
-    if not hits:
-        raise SystemExit('KKn() signature not found; graph layout changed?')
+    matches = list(SEARCH_OPT_IN_GETTER.finditer(data))
+    if not matches:
+        raise SystemExit('searchToolsOptIn() getter not found; graph layout changed?')
+    patches = []
+    for match in matches:
+        old_fn = match.group(0)
+        new_body = b'function ' + match.group('fn') + b'(){return!0'
+        if len(new_body) > len(old_fn):
+            raise SystemExit(f'replacement ({len(new_body)}B) is longer than getter '
+                             f'({len(old_fn)}B); patching would shift the graph')
+        new_fn = make_replacement(old_fn, new_body)
+        data[match.start():match.end()] = new_fn
+        patches.append((match.start(), new_fn))
+    hits = [site for site, _ in patches]
     adaptations = ['search_shadow']
-    print(f'patched KKn() at {hits} -> {new_fn[:40]!r}...')
+    print(f'patched searchToolsOptIn() getter at {hits}')
 
     # Force every module whose contents contain a patched site to compile from source.
     forced = set()
@@ -85,9 +87,10 @@ def main():
         # runtime keeps executing that module's bytecode and never compiles the
         # patched source: the adaptation silently does nothing while the build
         # still reports success.
-        raise SystemExit(f'KKn() patched at {hits} but no module record covers those '
-                         'bytes, so nothing would be forced to compile from source '
-                         'and the adaptation would be a silent no-op. Layout changed?')
+        raise SystemExit(f'searchToolsOptIn() getter patched at {hits} but no module '
+                         'record covers those bytes, so nothing would be forced to '
+                         'compile from source and the adaptation would be a silent '
+                         'no-op. Layout changed?')
 
     forced_names = []
     for i in sorted(forced):
@@ -106,9 +109,9 @@ def main():
     # Read the sites back rather than trusting the write: a patch that did not
     # land produces a build that looks fine and breaks grep/find again.
     with open(dst, 'rb') as f:
-        for h in hits:
+        for h, expected in patches:
             f.seek(h)
-            if f.read(len(new_fn)) != new_fn:
+            if f.read(len(expected)) != expected:
                 raise SystemExit(f'patched site {h} did not land in {dst}')
     print(f'wrote {dst} ({len(data)} bytes)')
 
