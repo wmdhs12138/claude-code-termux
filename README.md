@@ -62,45 +62,44 @@ Bionic Bun 运行时**。项目不包含、也无法获取 Claude Code 的闭源
 
 ## 快速开始
 
-### 1. 准备环境
+### 1. 一键安装
 
-使用 F-Droid 或 GitHub 发布的 Termux，在 AArch64 设备上安装依赖：
+使用 F-Droid 或 GitHub 发布的 Termux，在 AArch64 设备上执行：
 
 ```bash
 pkg update
-pkg install git make python3 unzip curl ripgrep util-linux
-```
-
-构建和自更新还会使用 Termux 基础环境里的 `bash`、`tar`、`awk`、`mktemp` 与 SHA-256
-工具。
-
-### 2. 本地构建
-
-```bash
+pkg install git
 git clone https://github.com/wmdhs12138/claude-code-termux.git ~/claude-code-termux
 cd ~/claude-code-termux
-make test
-make build VERSION=latest
+./install.sh
+claude
 ```
 
-`make build` 会依次完成官方下载与校验、模块图提取、ABI 防漂移检查、兼容层注入、ELF
-嫁接、闭环校验、版本检查和真实 TUI smoke test。成功产物位于 `dist/claude`。
+安装器会检查 Termux、AArch64 和 Android API 版本，按需安装缺少的依赖，然后构建、验证、备份旧
+命令并原子安装到 `~/bin/claude`。如果 `~/bin` 尚未加入 `PATH`，末尾会打印需要添加的配置。
 
-### 3. 安装单 ELF
-
-推荐把构建产物直接放进 `~/bin`：
+可以指定 Claude 版本：
 
 ```bash
-mkdir -p ~/bin
-cp -p ~/bin/claude ~/bin/claude.backup 2>/dev/null || true
-cp dist/claude ~/bin/claude
-chmod 700 ~/bin/claude
-hash -r
-claude --version
+./install.sh 2.1.272
 ```
 
-确保 shell 的 `PATH` 包含 `~/bin`。这条路径中安装的是约 228 MB 的真实 Bionic ELF，
-不是转发到项目目录的脚本。
+默认目标目录可用 `CLAUDE_CODE_TERMUX_INSTALL_DIR` 修改；设置
+`CLAUDE_CODE_TERMUX_SKIP_DEPS=1` 可以禁止安装器自动调用 `pkg install`。
+
+### 2. 开发者分步构建
+
+需要检查或修改工具链时，可以分步执行：
+
+```bash
+make test
+make build VERSION=latest
+make install
+```
+
+`make build` 完成官方下载与校验、模块图提取、ABI 防漂移检查、兼容层注入、ELF 嫁接、闭环校验、
+版本检查和真实 TUI smoke test。`make install` 只把已经验证的 `dist/claude` 原子安装，不会再次构建。
+安装到 `~/bin/claude` 的是约 228 MB 的真实 Bionic ELF，不是转发脚本。
 
 ## 直接自更新
 
@@ -209,6 +208,7 @@ make fingerprint
 ```bash
 make test                    # 工具链回归测试
 make build VERSION=latest    # 构建并在当前 Android 设备验证
+make install                 # 原子安装已有 dist/claude，并备份旧命令
 make verify                  # 输出 dist/claude 版本
 make smoke                   # 运行 7 秒 TUI smoke test
 make fingerprint             # 计算工具链指纹
@@ -220,6 +220,7 @@ make distclean               # 删除全部下载缓存和构建产物（约 1 G
 
 ```text
 Makefile                  构建、验证和维护入口
+install.sh                平台检查、依赖安装、构建与原子安装
 versions.json             输入与实机产物锁定信息
 scripts/build.sh          完整构建事务
 scripts/fetch-claude.sh   官方版本解析、下载和校验

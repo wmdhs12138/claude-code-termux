@@ -26,15 +26,8 @@ smoke:
 test:
 	python3 -m unittest discover -s tests -v
 
-# The launcher template substitutes @ROOT@ through sed, so escape the path
-# first: an '&' or '|' in it would otherwise silently produce a launcher that
-# points somewhere else.
 install:
-	mkdir -p "$(HOME)/bin"
-	ROOT_ESC=$$(printf '%s' '$(ROOT)' | sed 's/[&|\\]/\\&/g'); \
-	  sed "s|@ROOT@|$$ROOT_ESC|g" scripts/launcher.sh > "$(HOME)/bin/claude"
-	chmod +x "$(HOME)/bin/claude"
-	@echo "installed: $(HOME)/bin/claude"
+	bash install.sh --no-build
 
 uninstall:
 	rm -f "$(HOME)/bin/claude"

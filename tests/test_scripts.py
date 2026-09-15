@@ -19,6 +19,7 @@ UPDATE = ROOT / "scripts" / "update.sh"
 LAUNCHER = ROOT / "scripts" / "launcher.sh"
 POLYFILL = ROOT / "tools" / "cellsegmenter-polyfill.js"
 EMBED_PRELOAD = ROOT / "tools" / "embed_preload.py"
+INSTALL = ROOT / "install.sh"
 
 
 class VersionValidationTests(unittest.TestCase):
@@ -329,6 +330,55 @@ class UpdateRecoveryTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("current binary is not runnable", proc.stderr)
         self.assertIn("updated: 1.2.3 (Claude Code)", proc.stdout)
+
+
+class InstallerTests(unittest.TestCase):
+    def test_installs_direct_elf_atomically_and_backs_up_old_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            target_dir = Path(tmp) / "bin"
+            (root / "dist").mkdir(parents=True)
+            target_dir.mkdir()
+            shutil.copy2(INSTALL, root / "install.sh")
+
+            candidate = root / "dist" / "claude"
+            candidate.write_text("#!/bin/sh\necho '9.8.7 (Claude Code)'\n")
+            candidate.chmod(0o755)
+            target = target_dir / "claude"
+            target.write_text("old launcher\n")
+            target.chmod(0o700)
+
+            env = dict(os.environ)
+            env.update(
+                {
+                    "CLAUDE_CODE_TERMUX_ALLOW_UNSUPPORTED": "1",
+                    "CLAUDE_CODE_TERMUX_INSTALL_DIR": str(target_dir),
+                }
+            )
+            proc = subprocess.run(
+                ["bash", str(root / "install.sh"), "--no-build"],
+                text=True,
+                capture_output=True,
+                env=env,
+            )
+
+            backups = list(target_dir.glob("claude.backup-*"))
+            leftovers = list(target_dir.glob(".claude-install.*"))
+            target_text = target.read_text()
+            backup_text = backups[0].read_text() if len(backups) == 1 else None
+
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(target_text, "#!/bin/sh\necho '9.8.7 (Claude Code)'\n")
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backup_text, "old launcher\n")
+        self.assertEqual(leftovers, [])
+        self.assertIn("installed:", proc.stdout)
+
+    def test_make_install_no_longer_writes_a_launcher(self):
+        makefile = (ROOT / "Makefile").read_text()
+        section = makefile.split("install:\n", 1)[1].split("\nuninstall:", 1)[0]
+        self.assertIn("bash install.sh --no-build", section)
+        self.assertNotIn("launcher.sh", section)
 
 
 class CellSegmenterPolyfillTests(unittest.TestCase):
