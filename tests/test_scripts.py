@@ -353,6 +353,15 @@ class CellSegmenterPolyfillTests(unittest.TestCase):
         self.assertIn('process.env.USE_BUILTIN_RIPGREP === undefined', source)
         self.assertIn('process.env.DISABLE_AUTOUPDATER === undefined', source)
 
+    def test_embeds_atomic_self_update(self):
+        source = POLYFILL.read_text()
+        self.assertIn('argv[ai] === "update" || argv[ai] === "upgrade"', source)
+        self.assertIn('https://downloads.claude.ai/claude-code-releases/latest', source)
+        self.assertIn('claude-code-termux/commits/main', source)
+        self.assertIn('mv -f "$replacement" "$target"', source)
+        self.assertIn('updateArgs.indexOf("--check")', source)
+        self.assertIn('updateArgs.indexOf("--force")', source)
+
 
 class EmbeddedPreloadTests(unittest.TestCase):
     @staticmethod

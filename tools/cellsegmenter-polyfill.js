@@ -4,8 +4,8 @@
 // "This build of @anthropic-ai/bun-internal has no Bun.ant.CellSegmenter" and
 // the first frame never completes (blank terminal).
 //
-// scripts/launcher.sh loads this file with BUN_OPTIONS=--preload, which the
-// compiled standalone honors before the module graph runs. Implemented surface
+// tools/embed_preload.py inserts this file into the compiled standalone entry
+// module, before Claude's source runs. Implemented surface
 // (discovered from 2.1.272's src/ink call sites):
 //   new CellSegmenter({ambiguousIsNarrow, substitute, screen})
 //     .graphemes .sgrKeys .sgrCloseKeys .uris   append-only pools
@@ -24,6 +24,106 @@
   if (typeof process !== "undefined" && process.platform === "android") {
     if (process.env.USE_BUILTIN_RIPGREP === undefined) process.env.USE_BUILTIN_RIPGREP = "0";
     if (process.env.DISABLE_AUTOUPDATER === undefined) process.env.DISABLE_AUTOUPDATER = "1";
+
+    // Intercept the official updater before Claude's CLI sees it. The official
+    // download is a glibc standalone, so updating a bionic graft means building
+    // a new graft locally and atomically replacing this executable.
+    var argv = process.argv || [];
+    var updateIndex = -1;
+    for (var ai = 1; ai < argv.length && ai <= 2; ai++) {
+      if (argv[ai] === "update" || argv[ai] === "upgrade") {
+        updateIndex = ai;
+        break;
+      }
+    }
+    if (updateIndex !== -1) {
+      var updateArgs = argv.slice(updateIndex + 1);
+      var updateCheck = updateArgs.indexOf("--check") !== -1;
+      var updateForce = updateArgs.indexOf("--force") !== -1;
+      var updateScript = String.raw`
+set -euo pipefail
+target="$1"
+force="$2"
+check="$3"
+
+latest="$(curl -fsSL --max-time 30 https://downloads.claude.ai/claude-code-releases/latest)"
+case "$latest" in
+  ''|*[!0-9.]*) echo "claude update: invalid latest version '$latest'" >&2; exit 1 ;;
+esac
+current="$($target --version | awk '{print $1}')"
+
+if [ "$check" = "1" ]; then
+  printf 'current: %s\nlatest:  %s\n' "$current" "$latest"
+  if [ "$current" = "$latest" ]; then
+    echo "Claude Code is up to date"
+  else
+    echo "Claude Code update available"
+  fi
+  exit 0
+fi
+if [ "$force" != "1" ] && [ "$current" = "$latest" ]; then
+  echo "Claude Code $current is already up to date (use --force to rebuild)"
+  exit 0
+fi
+
+cache_root="\${XDG_CACHE_HOME:-$HOME/.cache}/claude-code-termux/self-update"
+mkdir -p "$cache_root"
+commit="$(curl -fsSL --max-time 30 https://api.github.com/repos/wmdhs12138/claude-code-termux/commits/main \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])')"
+case "$commit" in
+  [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
+  *) echo "claude update: invalid toolchain commit '$commit'" >&2; exit 1 ;;
+esac
+source_dir="$cache_root/toolchain-$commit"
+if [ ! -r "$source_dir/scripts/build.sh" ]; then
+  stage="$(mktemp -d "$cache_root/download.XXXXXX")"
+  trap 'rm -rf "$stage"' EXIT
+  curl -fL --retry 3 --retry-all-errors \
+    "https://github.com/wmdhs12138/claude-code-termux/archive/$commit.tar.gz" \
+    -o "$stage/toolchain.tar.gz"
+  mkdir "$stage/source"
+  tar -xzf "$stage/toolchain.tar.gz" -C "$stage/source" --strip-components=1
+  mv "$stage/source" "$source_dir"
+  rm -rf "$stage"
+  trap - EXIT
+fi
+
+echo "claude update: $current -> $latest"
+echo "claude update: toolchain $commit"
+(cd "$source_dir" && bash scripts/build.sh "$latest")
+candidate="$source_dir/dist/claude"
+test -x "$candidate"
+candidate_version="$($candidate --version | awk '{print $1}')"
+test "$candidate_version" = "$latest"
+
+target_dir="$(dirname "$target")"
+replacement="$(mktemp "$target_dir/.claude-update.XXXXXX")"
+trap 'rm -f "$replacement"' EXIT
+cp "$candidate" "$replacement"
+chmod 755 "$replacement"
+replacement_version="$($replacement --version | awk '{print $1}')"
+test "$replacement_version" = "$latest"
+mv -f "$replacement" "$target"
+trap - EXIT
+echo "Claude Code updated successfully: $current -> $latest"
+`;
+      var updateResult = Bun.spawnSync({
+        cmd: [
+          "bash",
+          "-c",
+          updateScript,
+          "claude-self-update",
+          process.execPath,
+          updateForce ? "1" : "0",
+          updateCheck ? "1" : "0",
+        ],
+        stdin: "inherit",
+        stdout: "inherit",
+        stderr: "inherit",
+        env: process.env,
+      });
+      process.exit(updateResult.exitCode === 0 ? 0 : updateResult.exitCode || 1);
+    }
   }
   if (!Bun.ant) {
     try {

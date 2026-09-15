@@ -62,6 +62,7 @@ ABI（`segment` / `paint` / `setCell` 及 `graphemes`/`sgrKeys`/`uris` 池）。
 ## 快速开始
 
 Termux（F-Droid/GitHub 版）、aarch64、Android 9+（API 28+）、`pkg install python3 unzip curl ripgrep util-linux`。
+自更新还使用 Termux 基础环境自带的 `bash`、`tar`、`awk`、`mktemp` 和 SHA-256 工具。
 
 ```bash
 git clone https://github.com/wmdhs12138/claude-code-termux.git ~/claude-code-termux
@@ -71,8 +72,10 @@ make install        # 安装到 ~/bin/claude（同名文件会被覆盖，先自
 claude              # TUI
 ```
 
-更新用 `claude update`（`--check` 只检查，`--force` 强制重建）。launcher 拦截了官方自更新——那会
-下载 glibc 版覆盖原生产物——改为在本地重走一遍管线。
+更新用 `claude update`（`--check` 只检查，`--force` 强制重建）。拦截器已经嵌入最终 ELF：它查询
+官方最新版本，解析本仓库 `main` 的不可变 commit，在 Termux 缓存目录下载对应工具链、构建并验证
+新的 bionic 候选，最后原子替换当前可执行文件。任一步失败都会保留旧 ELF；不会调用那个会下载
+glibc 产物的官方自更新器。直接执行 `dist/claude update` 同样有效，不要求 launcher。
 
 ### 账号与模型
 

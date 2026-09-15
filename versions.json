@@ -10,9 +10,9 @@
   },
   "verified_output": {
     "file": "dist/claude",
-    "sha256": "fdf73993356b16d17f28557e3db3e85c968678129a7f8e5c488f4e970b71ad6a",
-    "size": 227805461,
-    "graph_sha256": "cb3c91e1c8b21fe7b17f95a593bd63128e3f0545784fd214cf594dde04399a20",
+    "sha256": "e78ccd7b34ce65e601bb1cf377f7de08dd0be664bc1a883b5312149841b7da53",
+    "size": 227808930,
+    "graph_sha256": "7b701582b012ddf345ebc5c541f051ba5af275192af70d04b63746a8c897c9e6",
     "adaptations": [
       "search_shadow",
       "embedded_cellsegmenter"
