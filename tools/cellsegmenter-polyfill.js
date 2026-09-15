@@ -1,0 +1,358 @@
+// Pure-JS implementation of the Bun.ant.CellSegmenter ABI that Claude Code
+// >= 2.1.271 expects from Anthropic's private @anthropic-ai/bun-internal
+// runtime. The grafted Android Bun has no Bun.ant, so the Ink renderer throws
+// "This build of @anthropic-ai/bun-internal has no Bun.ant.CellSegmenter" and
+// the first frame never completes (blank terminal).
+//
+// scripts/launcher.sh loads this file with BUN_OPTIONS=--preload, which the
+// compiled standalone honors before the module graph runs. Implemented surface
+// (discovered from 2.1.272's src/ink call sites):
+//   new CellSegmenter({ambiguousIsNarrow, substitute, screen})
+//     .graphemes .sgrKeys .sgrCloseKeys .uris   append-only pools
+//     .segment(text, cells, runs, reordered)    -> cell count or -needed
+//     .paint(screenCells, width, x, y, lineCells, count, _, charIndices, words)
+//     .setCell(screenCells, width, x, y, charIndex, packedStyle)
+// Line cells pack (run << 10) | (tab ? 256 : 0) | columnWidth, screen cells
+// pack styleId << 17 | linkId << 2 | widthCategory, matching src/ink readers.
+
+(function () {
+  if (typeof Bun === "undefined") return;
+  if (!Bun.ant) {
+    try {
+      Bun.ant = {};
+    } catch {
+      return;
+    }
+  }
+  if (typeof Bun.ant.CellSegmenter === "function") return;
+
+  var ESC = "\x1b";
+  var DEFAULT_TAB_WIDTH = 8;
+  var SUBSTITUTE = "\ufffd";
+  var STYLE_ORDER = ["bold", "dim", "italic", "underline", "inverse", "strike", "fg", "bg"];
+  var SGR_END = {
+    bold: ESC + "[22m",
+    dim: ESC + "[22m",
+    italic: ESC + "[23m",
+    underline: ESC + "[24m",
+    inverse: ESC + "[27m",
+    strike: ESC + "[29m",
+    fg: ESC + "[39m",
+    bg: ESC + "[49m",
+  };
+
+  function displayWidth(text, ambiguousIsNarrow) {
+    if (text === "" || text === "\t" || text === "\n" || text === "\r") return 0;
+    if (typeof Bun.stringWidth === "function") {
+      try {
+        var width = Bun.stringWidth(text, { ambiguousIsNarrow: !!ambiguousIsNarrow });
+        if (width > 0) return width > 2 ? 2 : width;
+        if (width === 0) return 0;
+      } catch {}
+    }
+    var total = 0;
+    for (var i = 0; i < text.length; ) {
+      var cp = text.codePointAt(i);
+      i += cp > 0xffff ? 2 : 1;
+      if (cp < 32 || (cp >= 0x7f && cp < 0xa0)) continue;
+      if (
+        (cp >= 0x1100 && cp <= 0x115f) ||
+        (cp >= 0x2e80 && cp <= 0xa4cf) ||
+        (cp >= 0xac00 && cp <= 0xd7a3) ||
+        (cp >= 0xf900 && cp <= 0xfaff) ||
+        (cp >= 0xfe30 && cp <= 0xfe6f) ||
+        (cp >= 0xff00 && cp <= 0xff60) ||
+        (cp >= 0xffe0 && cp <= 0xffe6) ||
+        (cp >= 0x1f300 && cp <= 0x1faff) ||
+        (cp >= 0x20000 && cp <= 0x3fffd)
+      )
+        total += 2;
+      else total += 1;
+    }
+    return total > 2 ? 2 : total;
+  }
+
+  function applySgr(params, state) {
+    if (params.length === 0) params = [0];
+    for (var i = 0; i < params.length; i++) {
+      var p = params[i];
+      if (p === 0) {
+        state.clear();
+      } else if (p === 1 || p === 2 || p === 3 || p === 4 || p === 7 || p === 9) {
+        var kind = { 1: "bold", 2: "dim", 3: "italic", 4: "underline", 7: "inverse", 9: "strike" }[p];
+        state.set(kind, { code: ESC + "[" + p + "m", endCode: SGR_END[kind] });
+      } else if (p === 22) {
+        state.delete("bold");
+        state.delete("dim");
+      } else if (p === 23 || p === 24 || p === 27 || p === 29) {
+        state.delete({ 23: "italic", 24: "underline", 27: "inverse", 29: "strike" }[p]);
+      } else if ((p >= 30 && p <= 37) || (p >= 90 && p <= 97)) {
+        state.set("fg", { code: ESC + "[" + p + "m", endCode: SGR_END.fg });
+      } else if ((p >= 40 && p <= 47) || (p >= 100 && p <= 107)) {
+        state.set("bg", { code: ESC + "[" + p + "m", endCode: SGR_END.bg });
+      } else if (p === 39) {
+        state.delete("fg");
+      } else if (p === 49) {
+        state.delete("bg");
+      } else if (p === 38 || p === 48) {
+        var colorKind = p === 38 ? "fg" : "bg";
+        if (params[i + 1] === 5 && Number.isInteger(params[i + 2])) {
+          state.set(colorKind, {
+            code: ESC + "[" + p + ";5;" + params[i + 2] + "m",
+            endCode: SGR_END[colorKind],
+          });
+          i += 2;
+        } else if (
+          params[i + 1] === 2 &&
+          Number.isInteger(params[i + 2]) &&
+          Number.isInteger(params[i + 3]) &&
+          Number.isInteger(params[i + 4])
+        ) {
+          state.set(colorKind, {
+            code:
+              ESC + "[" + p + ";2;" + params[i + 2] + ";" + params[i + 3] + ";" + params[i + 4] + "m",
+            endCode: SGR_END[colorKind],
+          });
+          i += 4;
+        }
+      }
+    }
+  }
+
+  function parseCsiParams(body) {
+    if (body === "") return [];
+    return body.split(";").map(function (part) {
+      var n = parseInt(part, 10);
+      return Number.isInteger(n) ? n : 0;
+    });
+  }
+
+  function* scan(text) {
+    var i = 0;
+    var start = 0;
+    var n = text.length;
+    while (i < n) {
+      var code = text.charCodeAt(i);
+      if (code !== 0x1b && code !== 0x9b) {
+        i++;
+        continue;
+      }
+      if (i > start) yield { type: "text", value: text.slice(start, i) };
+      if (code === 0x9b) {
+        var csiEnd = i + 1;
+        while (csiEnd < n && !(text.charCodeAt(csiEnd) >= 0x40 && text.charCodeAt(csiEnd) <= 0x7e)) csiEnd++;
+        if (text[csiEnd] === "m") yield { type: "sgr", params: parseCsiParams(text.slice(i + 1, csiEnd)) };
+        i = csiEnd + 1;
+      } else {
+        var next = text.charCodeAt(i + 1);
+        if (next === 0x5b) {
+          var end = i + 2;
+          while (end < n && !(text.charCodeAt(end) >= 0x40 && text.charCodeAt(end) <= 0x7e)) end++;
+          if (text[end] === "m") yield { type: "sgr", params: parseCsiParams(text.slice(i + 2, end)) };
+          i = end + 1;
+        } else if (next === 0x5d) {
+          var oscEnd = i + 2;
+          while (oscEnd < n) {
+            if (text.charCodeAt(oscEnd) === 0x07) {
+              oscEnd++;
+              break;
+            }
+            if (text.charCodeAt(oscEnd) === 0x1b && text.charCodeAt(oscEnd + 1) === 0x5c) {
+              oscEnd += 2;
+              break;
+            }
+            oscEnd++;
+          }
+          var oscBody = text.slice(i + 2, oscEnd).replace(/\x07$|\x1b\\$/, "");
+          if (oscBody.indexOf("8;") === 0) {
+            var parts = oscBody.split(";");
+            var uri = parts.slice(2).join(";");
+            yield { type: "link", uri: uri === "" ? null : uri };
+          }
+          i = oscEnd;
+        } else if (next === 0x28 || next === 0x29 || next === 0x2a || next === 0x2b || next === 0x23) {
+          i += 3;
+        } else if (!Number.isNaN(next)) {
+          i += 2;
+        } else {
+          i++;
+        }
+      }
+      start = i;
+    }
+    if (i > start) yield { type: "text", value: text.slice(start, i) };
+  }
+
+  class CellSegmenter {
+    constructor(options) {
+      options = options || {};
+      this.screen = options.screen || {};
+      this.ambiguousIsNarrow = !!options.ambiguousIsNarrow;
+      this.tabWidth = this.screen.tabWidth || DEFAULT_TAB_WIDTH;
+      this.emptyCharIndex = Number.isInteger(this.screen.emptyCharIndex) ? this.screen.emptyCharIndex : 0;
+      this.spacerCharIndex = Number.isInteger(this.screen.spacerCharIndex) ? this.screen.spacerCharIndex : 1;
+      this.substitute = Array.isArray(options.substitute) ? options.substitute : [];
+      this.graphemes = [];
+      this.sgrKeys = [""];
+      this.sgrCloseKeys = [""];
+      this.uris = [""];
+      this._segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+      this._styleByKey = new Map();
+      this._state = new Map();
+      this._uriById = new Map();
+    }
+
+    _isSubstitute(text) {
+      for (var i = 0; i < text.length; ) {
+        var cp = text.codePointAt(i);
+        i += cp > 0xffff ? 2 : 1;
+        for (var r = 0; r < this.substitute.length; r++) {
+          if (cp >= this.substitute[r][0] && cp <= this.substitute[r][1]) return true;
+        }
+      }
+      return false;
+    }
+
+    _styleIndex(state) {
+      var codes = [];
+      var closes = [];
+      for (var i = 0; i < STYLE_ORDER.length; i++) {
+        var component = state.get(STYLE_ORDER[i]);
+        if (component) {
+          codes.push(component.code);
+          closes.push(component.endCode);
+        }
+      }
+      if (codes.length === 0) return 0;
+      var key = codes.join("\u0001");
+      var index = this._styleByKey.get(key);
+      if (index === undefined) {
+        index = this.sgrKeys.length;
+        this.sgrKeys.push(codes.join("\x00"));
+        this.sgrCloseKeys.push(closes.join("\x00"));
+        this._styleByKey.set(key, index);
+      }
+      return index;
+    }
+
+    _uriIndex(uri) {
+      var index = this._uriById.get(uri);
+      if (index === undefined) {
+        index = this.uris.length;
+        this.uris.push(uri);
+        this._uriById.set(uri, index);
+      }
+      return index;
+    }
+
+    segment(text, cells, runs, reordered) {
+      var count = 0;
+      var style = 0;
+      var link = 0;
+      var run = 0;
+      var cellRun = 0;
+      var runStyle = -1;
+      var runLink = -1;
+      var state = this._state;
+      state.clear();
+      var capacity = cells.length >> 1;
+      for (var token of scan(text)) {
+        if (token.type === "sgr") {
+          applySgr(token.params, state);
+          style = this._styleIndex(state);
+          continue;
+        }
+        if (token.type === "link") {
+          link = token.uri === null ? 0 : this._uriIndex(token.uri);
+          continue;
+        }
+        for (var part of this._segmenter.segment(token.value)) {
+          var grapheme = part.segment;
+          var width;
+          var tab = false;
+          if (grapheme === "\t") {
+            tab = true;
+            width = 0;
+          } else {
+            if (this._isSubstitute(grapheme)) grapheme = SUBSTITUTE;
+            width = displayWidth(grapheme, this.ambiguousIsNarrow);
+            if (width <= 0) continue;
+          }
+          // src/ink retries exactly once and keeps the new count even if the
+          // retry also returns negative, so report an upper bound that always
+          // fits: cells never outnumber input characters.
+          if (count >= capacity) return -(capacity + text.length);
+          if (style !== runStyle || link !== runLink) {
+            runStyle = style;
+            runLink = link;
+            cellRun = run;
+            runs[run * 2] = style;
+            runs[run * 2 + 1] = link;
+            run++;
+          }
+          cells[count * 2] = this.graphemes.length;
+          cells[count * 2 + 1] = (cellRun << 10) | (tab ? 256 : 0) | width;
+          this.graphemes.push(grapheme);
+          count++;
+        }
+      }
+      return count;
+    }
+
+    paint(cells, width, x0, y, lineCells, count, _unused, charIndices, words) {
+      var tabWidth = this.tabWidth;
+      var spacer = this.spacerCharIndex;
+      var x = x0;
+      var min = -1;
+      var rowBase = (y * width) << 1;
+      for (var i = 0; i < count; i++) {
+        var packed = lineCells[i * 2 + 1];
+        var word = words[packed >>> 10] || 0;
+        var style = word >>> 17;
+        var link = (word >>> 2) & 32767;
+        var styleBits = (style << 17) | (link << 2);
+        if (packed & 256) {
+          var spaces = tabWidth - (((x % tabWidth) + tabWidth) % tabWidth);
+          while (spaces-- > 0 && x < width) {
+            var tabIndex = rowBase + (x << 1);
+            cells[tabIndex] = this.emptyCharIndex;
+            cells[tabIndex + 1] = styleBits;
+            if (min < 0) min = x;
+            x++;
+          }
+          continue;
+        }
+        var cellWidth = packed & 255;
+        if (cellWidth <= 0) continue;
+        if (x + cellWidth > width) break;
+        var index = rowBase + (x << 1);
+        var char = charIndices[lineCells[i * 2]];
+        cells[index] = char === undefined ? this.emptyCharIndex : char;
+        cells[index + 1] = styleBits | (cellWidth === 2 ? 1 : 0);
+        if (min < 0) min = x;
+        if (cellWidth === 2 && x + 1 < width) {
+          cells[index + 2] = spacer;
+          cells[index + 3] = styleBits | 2;
+        }
+        x += cellWidth;
+      }
+      if (min < 0) min = x0;
+      return x * 68719476736 + min * 1048576 + x;
+    }
+
+    setCell(cells, width, x, y, charCode, packed) {
+      if (x < 0 || y < 0 || x >= width) return 0;
+      var index = ((y * width + x) << 1);
+      cells[index] = charCode;
+      cells[index + 1] = packed;
+      var span = (packed & 3) === 1 ? 2 : 1;
+      if (span === 2 && x + 1 < width) {
+        cells[index + 2] = this.spacerCharIndex;
+        cells[index + 3] = (packed & ~3) | 2;
+      }
+      return (x + span) * 68719476736 + x * 1048576 + (x + span);
+    }
+  }
+
+  Bun.ant.CellSegmenter = CellSegmenter;
+})();

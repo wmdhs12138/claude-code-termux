@@ -41,6 +41,19 @@ Pinned Android Bun (bionic ELF)  ──►  dist/claude   (单 ELF, 225 MB)
 把它改成返回 true，并让所在模块强制源码编译；`find`/`grep` 即回退 Termux 系统二进制。只影响
 shell 快照生成，启动开销可忽略。
 
+## 适配：回填 Bun.ant.CellSegmenter
+
+从 2.1.271 起，Ink 的文本布局与绘制改用了 `@anthropic-ai/bun-internal` 的原生接口
+`Bun.ant.CellSegmenter`（grapheme 切分、SGR/OSC8 解析、按 cell 包装与绘制）。官方
+Android Bun 底座没有这个接口，首屏渲染在 `showSetupScreens()` 里抛错又被空 Suspense
+吞掉，表现就是终端空白。
+
+`tools/cellsegmenter-polyfill.js` 用 `Intl.Segmenter` + `Bun.stringWidth` 实现了同一套
+ABI（`segment` / `paint` / `setCell` 及 `graphemes`/`sgrKeys`/`uris` 池），launcher 通过
+`BUN_OPTIONS=--preload …/cellsegmenter-polyfill.js` 注入；2.1.270 不引用该接口，加载它无副作用。
+注意：只有走 launcher（`claude`）才会带上 preload，直接执行 `dist/claude` 需要自己设置
+`BUN_OPTIONS`。
+
 ## 快速开始
 
 Termux（F-Droid/GitHub 版）、aarch64、Android 9+（API 28+）、`pkg install python3 unzip curl ripgrep util-linux`。
@@ -74,6 +87,7 @@ export ANTHROPIC_MODEL="deepseek-flash"
 |---|---|
 | `USE_BUILTIN_RIPGREP=0` | **必需**：内嵌 ripgrep 是 Linux 二进制，强制用系统 `rg` |
 | `DISABLE_AUTOUPDATER=1` | **必需**：防止自更新拉 glibc 版覆盖产物 |
+| `BUN_OPTIONS=--preload …` | launcher 自动加：为 2.1.271+ 注入 `Bun.ant.CellSegmenter` JS 实现 |
 
 ## 仓库结构
 
@@ -83,6 +97,7 @@ versions.json             版本与哈希锁定，构建后自动刷新
 scripts/                  fetch-claude.sh · build.sh · update.sh · launcher.sh
 tools/                    extract_graph.py · adapt_graph.py · verify_graft.py
                           revive_patch.py · bunsec.py / graph.py · tui_smoke.py
+                          cellsegmenter-polyfill.js（运行时注入，见上）
 docs/format.md            .bun 节格式逆向笔记
 evidence/                 构建与验证日志
 .github/                  workflows/build.yml · release_notes.py

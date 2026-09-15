@@ -15,6 +15,8 @@ SMOKE = ROOT / "tools" / "tui_smoke.py"
 FETCH = ROOT / "scripts" / "fetch-claude.sh"
 BUILD = ROOT / "scripts" / "build.sh"
 UPDATE = ROOT / "scripts" / "update.sh"
+LAUNCHER = ROOT / "scripts" / "launcher.sh"
+POLYFILL = ROOT / "tools" / "cellsegmenter-polyfill.js"
 
 
 class VersionValidationTests(unittest.TestCase):
@@ -222,6 +224,80 @@ class UpdateRecoveryTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("current binary is not runnable", proc.stderr)
         self.assertIn("updated: 1.2.3 (Claude Code)", proc.stdout)
+
+
+class CellSegmenterPolyfillTests(unittest.TestCase):
+    def test_file_implements_the_native_surface(self):
+        source = POLYFILL.read_text()
+        for member in ("Bun.ant.CellSegmenter =", "segment(text, cells, runs", "paint(", "setCell("):
+            self.assertIn(member, source)
+
+    def test_syntax_is_valid(self):
+        for runtime in ("node", "bun"):
+            exe = shutil.which(runtime)
+            if exe:
+                break
+        else:
+            self.skipTest("no JS runtime available for a syntax check")
+        proc = subprocess.run([exe, "--check", str(POLYFILL)], text=True, capture_output=True)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+
+class LauncherPreloadTests(unittest.TestCase):
+    def install_launcher(self, root, with_polyfill=True):
+        scripts = root / "scripts"
+        scripts.mkdir(parents=True)
+        launcher = scripts / "launcher.sh"
+        launcher.write_text(LAUNCHER.read_text().replace("@ROOT@", str(root)))
+        launcher.chmod(0o755)
+        if with_polyfill:
+            tools = root / "tools"
+            tools.mkdir()
+            (tools / "cellsegmenter-polyfill.js").write_text("// stub\n")
+        binary = root / "dist" / "claude"
+        binary.parent.mkdir()
+        binary.write_text('#!/bin/sh\necho "BUN_OPTIONS=${BUN_OPTIONS:-unset}"\necho "args=$*"\n')
+        binary.chmod(0o755)
+        return launcher
+
+    def run_launcher(self, launcher, env=None):
+        base = {
+            "PATH": os.environ["PATH"],
+            "HOME": str(launcher.parents[1] / "home"),
+        }
+        Path(base["HOME"]).mkdir(exist_ok=True)
+        if env:
+            base.update(env)
+        return subprocess.run(
+            ["bash", str(launcher), "--version"], text=True, capture_output=True, env=base
+        )
+
+    def test_preloads_polyfill_for_the_grafted_binary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            launcher = self.install_launcher(root)
+            proc = self.run_launcher(launcher)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn(
+            f"--preload {root}/tools/cellsegmenter-polyfill.js", proc.stdout
+        )
+        self.assertIn("args=--version", proc.stdout)
+
+    def test_keeps_user_bun_options(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            launcher = self.install_launcher(root)
+            proc = self.run_launcher(launcher, {"BUN_OPTIONS": "--smol"})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn(f"BUN_OPTIONS=--smol --preload {root}/tools/cellsegmenter-polyfill.js", proc.stdout)
+
+    def test_skips_preload_when_polyfill_is_absent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            launcher = self.install_launcher(root, with_polyfill=False)
+            proc = self.run_launcher(launcher)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("BUN_OPTIONS=unset", proc.stdout)
 
 
 class TuiSmokeTests(unittest.TestCase):

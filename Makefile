@@ -21,7 +21,8 @@ verify:
 	./dist/claude --version
 
 smoke:
-	python3 tools/tui_smoke.py ./dist/claude 7
+	BUN_OPTIONS="--preload $(ROOT)/tools/cellsegmenter-polyfill.js" \
+	  python3 tools/tui_smoke.py ./dist/claude 7
 
 test:
 	python3 -m unittest discover -s tests -v
