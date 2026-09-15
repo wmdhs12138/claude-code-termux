@@ -89,12 +89,12 @@ export ANTHROPIC_AUTH_TOKEN="sk-..."
 export ANTHROPIC_MODEL="deepseek-flash"
 ```
 
-## 环境变量（launcher 已处理）
+## 兼容默认值（最终 ELF 已内置）
 
 | 变量 | 作用 |
 |---|---|
-| `USE_BUILTIN_RIPGREP=0` | **必需**：内嵌 ripgrep 是 Linux 二进制，强制用系统 `rg` |
-| `DISABLE_AUTOUPDATER=1` | **必需**：防止自更新拉 glibc 版覆盖产物 |
+| `USE_BUILTIN_RIPGREP=0` | 默认内置：内嵌 ripgrep 是 Linux 二进制，强制用系统 `rg` |
+| `DISABLE_AUTOUPDATER=1` | 默认内置：禁用会下载 glibc 产物的官方自更新器；由嵌入式 Bionic 更新器接管 `claude update` |
 
 ## 仓库结构
 
