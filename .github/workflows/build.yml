@@ -48,7 +48,9 @@ jobs:
             exit 1
           fi
           echo "version=$V" >> "$GITHUB_OUTPUT"
-          if git tag -l | grep -qx "v$V"; then
+          # An immutable release reserves its tag name forever: a yanked version
+          # comes back as v$V-rN, so both forms count as released.
+          if git tag -l | grep -qE "^v$V(-r[0-9]+)?$"; then
             echo "unreleased=false" >> "$GITHUB_OUTPUT"
             echo "v$V already has a release"
           else
@@ -154,7 +156,8 @@ jobs:
               git log --oneline --no-decorate -20 -- $TC_PATHS > changelog.txt
             fi
             RELEASED="$(git tag -l 'v*' \
-                        | sed -n 's|^v\([0-9][0-9.]*\)$|\1|p' | sort -V | paste -sd, -)"
+                        | sed -E -n 's|^v([0-9][0-9.]*)(-r[0-9]+)?$|\1|p' \
+                        | sort -uV | paste -sd, -)"
 
             # This tag is cut before the Claude release of the same run (that note
             # needs it), and `gh release create` publishes its tag through the API,
@@ -207,6 +210,29 @@ jobs:
             fi
           done
 
-          gh release create "v$VERSION" --title "Claude Code $VERSION · Termux" \
-            --notes-file claude-notes.md $ASSETS
-          echo "released v$VERSION"
+          # An immutable release permanently reserves its tag name, so a yanked
+          # version can never be re-cut as v$VERSION. Attempt it anyway and, if
+          # the API rejects the burned name, cut the next free v$VERSION-rN.
+          TAG="v$VERSION"
+          TITLE="Claude Code $VERSION · Termux"
+          set +e
+          OUT="$(gh release create "$TAG" --title "$TITLE" \
+            --notes-file claude-notes.md $ASSETS 2>&1)"
+          RC=$?
+          set -e
+          if [ "$RC" != "0" ]; then
+            if ! printf '%s' "$OUT" | grep -q 'immutable release'; then
+              printf '%s\n' "$OUT" >&2
+              exit "$RC"
+            fi
+            N=1
+            while git ls-remote --tags origin "refs/tags/v$VERSION-r$N" | grep -q .; do
+              N=$((N+1))
+            done
+            TAG="v$VERSION-r$N"
+            TITLE="Claude Code $VERSION · Termux (r$N)"
+            echo "v$VERSION is reserved by an immutable release; re-cutting as $TAG"
+            gh release create "$TAG" --title "$TITLE" \
+              --notes-file claude-notes.md $ASSETS
+          fi
+          echo "released $TAG"
