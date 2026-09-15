@@ -3,8 +3,8 @@
 最新版 Claude Code 的原生 Termux 移植：**零 glibc、零 ptrace、零 proot**，单个 bionic ELF 直接 `execve`。
 
 > **English**: Run the latest Claude Code natively on Termux/Android (bionic).
-> No glibc, no ptrace, no proot — a single bionic ELF produced by grafting
-> Claude's Bun standalone module graph onto an Android Bun runtime.
+> No glibc, no ptrace, no proot — a self-contained bionic ELF produced by
+> grafting Claude's patched Bun standalone graph onto an Android Bun runtime.
 
 ## 状态
 
@@ -17,16 +17,17 @@
 ## 原理
 
 官方 Claude Code 是 Bun 编译的 **glibc** 单文件程序，Termux（bionic）跑不了。本项目把官方二进制里
-内嵌的 **standalone 模块图**原样取出，嫁接到官方 Android Bun 运行时上：
+内嵌的 **standalone 模块图**取出、适配，再嫁接到自行编译的 Android Bun 运行时上：
 
 ```
 downloads.claude.ai/…/linux-arm64/claude   (glibc, Bun 1.4.3)
         │  tools/extract_graph.py   定位 .bun 节，取 [u64 len][graph]
         ▼
 claude-graph.bin   (~1864 modules, ~136 MB, 含源码)
-        │  tools/revive_patch.py    BUN_COMPILED.size + PT_LOAD 手术
+        │  adapt_graph.py + embed_preload.py   兼容补丁内嵌入口模块
+        │  revive_patch.py                     BUN_COMPILED.size + PT_LOAD 手术
         ▼
-Pinned Android Bun (bionic ELF)  ──►  dist/claude   (单 ELF, 225 MB)
+Patched Android Bun (bionic ELF) ──►  dist/claude   (自包含单 ELF, 228 MB)
 ```
 
 模块图里的字节码与底座版本不符时，运行时会自动回退到内嵌源码。格式细节见 [docs/format.md](docs/format.md)。
@@ -49,10 +50,9 @@ Android Bun 底座没有这个接口，首屏渲染在 `showSetupScreens()` 里�
 吞掉，表现就是终端空白。
 
 `tools/cellsegmenter-polyfill.js` 用 `Intl.Segmenter` + `Bun.stringWidth` 实现了同一套
-ABI（`segment` / `paint` / `setCell` 及 `graphemes`/`sgrKeys`/`uris` 池），launcher 通过
-`BUN_OPTIONS=--preload …/cellsegmenter-polyfill.js` 注入；2.1.270 不引用该接口，加载它无副作用。
-注意：只有走 launcher（`claude`）才会带上 preload，直接执行 `dist/claude` 需要自己设置
-`BUN_OPTIONS`。
+ABI（`segment` / `paint` / `setCell` 及 `graphemes`/`sgrKeys`/`uris` 池）。构建时
+`tools/embed_preload.py` 把实现写入 standalone 入口模块，并清除该入口旧的 bytecode/module-info；
+因此 `dist/claude` 自己完成初始化，可直接执行，不依赖 launcher、外部 JS 文件或 `BUN_OPTIONS`。
 
 接口是私有的、没有上游变更日志，所以构建期有防漂移闸门：`tools/check_native_abi.py` 扫描
 模块图里实际用到的 `Bun.ant.*` 和 `CellSegmenter` 原生成员，与 polyfill 的 ABI 白名单比对，
@@ -92,7 +92,6 @@ export ANTHROPIC_MODEL="deepseek-flash"
 |---|---|
 | `USE_BUILTIN_RIPGREP=0` | **必需**：内嵌 ripgrep 是 Linux 二进制，强制用系统 `rg` |
 | `DISABLE_AUTOUPDATER=1` | **必需**：防止自更新拉 glibc 版覆盖产物 |
-| `BUN_OPTIONS=--preload …` | launcher 自动加：为 2.1.271+ 注入 `Bun.ant.CellSegmenter` JS 实现 |
 
 ## 仓库结构
 
@@ -100,9 +99,9 @@ export ANTHROPIC_MODEL="deepseek-flash"
 Makefile                  build / fetch / verify / smoke / install
 versions.json             版本与哈希锁定，构建后自动刷新
 scripts/                  fetch-claude.sh · build.sh · update.sh · launcher.sh
-tools/                    extract_graph.py · adapt_graph.py · verify_graft.py
+tools/                    extract_graph.py · adapt_graph.py · embed_preload.py · verify_graft.py
                           revive_patch.py · bunsec.py / graph.py · tui_smoke.py
-                          cellsegmenter-polyfill.js（运行时注入，见上）
+                          cellsegmenter-polyfill.js（构建时嵌入，见上）
                           check_native_abi.py（构建期 ABI 防漂移，见上）
 docs/format.md            .bun 节格式逆向笔记
 evidence/                 构建与验证日志
@@ -130,7 +129,8 @@ release notes 区分 CI 结构校验（产物未被执行）与实机验证（�
 ## 版本与底座锁定
 
 `versions.json` 同时锁定 Claude 官方 sha256、底座 Bun revision、下载包 sha256、解压后二进制
-sha256 和最终产物 sha256。底座下载地址指向本仓库的**不可变版本化镜像 release**，不会再因
+sha256 和最终产物 sha256。底座下载地址指向 [Bun bionic fork](https://github.com/wmdhs12138/bun)
+的**不可变版本化 release**，不会再因
 upstream 的滚动 `canary` tag 原地换包而让定时构建随机失败。镜像只包含 MIT 许可的 Bun Android
 运行时，不包含 Claude Code。
 
@@ -142,7 +142,7 @@ upstream URL 并运行 `BUN_URL=<url> make refresh-base`；只有 Android 实机
 
 - Claude 模块图当前要求 Bun ≥ 1.4.3 的格式；升级底座前必须重新做实机兼容性验证。
 - 内嵌 ripgrep / 自动更新不可用（launcher 已绕过）。
-- 产物 225 MB，未压缩；如需可自行 UPX。
+- 产物约 228 MB，未压缩；如需可自行 UPX。
 - 未在 Android 9 以下、非 aarch64 设备验证。
 
 ## 法律

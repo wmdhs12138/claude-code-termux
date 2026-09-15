@@ -8,7 +8,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="${1:-latest}"
-BUN_URL="${BUN_URL:-https://github.com/wmdhs12138/claude-code-termux/releases/download/bun-base-1.4.3-canary.1-5fce36ebb/bun-linux-aarch64-android.zip}"
+BUN_URL="${BUN_URL:-https://github.com/wmdhs12138/bun/releases/download/bionic-v1.4.3-canary.1-5fce36ebb/bun-linux-aarch64-android-5fce36ebb6.zip}"
 REFRESH_BASE="${REFRESH_BASE:-0}"
 WORK="$ROOT/work"
 DIST="$ROOT/dist"
@@ -236,9 +236,21 @@ fi
 echo "build: $(head -1 "$WORK/native-abi.log")" >&2
 
 # 3b. Termux adaptations (disable native bfs/ugrep shell shadowing, etc.)
-GRAPH_ADAPTED="$WORK/claude-graph-adapted.bin"
-python3 "$ROOT/tools/adapt_graph.py" "$GRAPH" "$GRAPH_ADAPTED" --report "$WORK/adapt-report.json" > "$WORK/adapt-report.log"
+GRAPH_SEARCH_ADAPTED="$WORK/claude-graph-search-adapted.bin"
+python3 "$ROOT/tools/adapt_graph.py" "$GRAPH" "$GRAPH_SEARCH_ADAPTED" --report "$WORK/adapt-report.json" > "$WORK/adapt-report.log"
 echo "build: adaptations applied ($(head -1 "$WORK/adapt-report.log"))" >&2
+
+# 3c. Embed the private-runtime compatibility shim into the entry module.  The
+#     resulting ELF starts directly: no launcher or BUN_OPTIONS preload path is
+#     required at runtime.
+POLYFILL="$ROOT/tools/cellsegmenter-polyfill.js"
+if [ ! -r "$POLYFILL" ]; then
+  fail_before_promote "tools/cellsegmenter-polyfill.js is missing; Claude >= 2.1.271 cannot render without it"
+fi
+GRAPH_ADAPTED="$WORK/claude-graph-adapted.bin"
+python3 "$ROOT/tools/embed_preload.py" "$GRAPH_SEARCH_ADAPTED" "$POLYFILL" \
+  "$GRAPH_ADAPTED" --report "$WORK/embed-preload.json" > "$WORK/embed-preload.log"
+echo "build: CellSegmenter compatibility embedded into the entry module" >&2
 
 # 4. graft onto the Android Bun ELF (BUN_COMPILED.size + PT_LOAD surgery).
 #    Staged to a temp path and left there: it does NOT replace dist/claude until
@@ -275,7 +287,7 @@ fi
 #     Bun.ant.CellSegmenter is broken -- the blank-terminal failure 2.1.271
 #     introduced -- passes both and is only discovered at the user's first
 #     launch. Render a real frame here, on the candidate rather than on
-#     dist/claude, with the same preload the launcher injects. This runs only
+#     dist/claude, without a preload environment. This runs only
 #     where the artifact can execute, which is the condition SKIP_RUN already
 #     encodes (the x64 CI runner cannot run an aarch64 bionic binary at all).
 SMOKE_RAN=0
@@ -285,17 +297,11 @@ if [ "${SKIP_RUN:-0}" = "1" ]; then
   SMOKE_REASON="SKIP_RUN=1"
   echo "build: TUI smoke skipped ($SMOKE_REASON)" >&2
 else
-  POLYFILL="$ROOT/tools/cellsegmenter-polyfill.js"
-  if [ ! -r "$POLYFILL" ]; then
-    die_kept "tools/cellsegmenter-polyfill.js is missing; Claude >= 2.1.271 renders through it and cannot start without it"
-  fi
   SMOKE_LOG="$WORK/tui-smoke.log"
-  # Mirror the launcher's environment exactly: same preload, and the two
-  # exports it forces. USE_BUILTIN_RIPGREP matters because the embedded rg is a
+  # USE_BUILTIN_RIPGREP matters because the embedded rg is a
   # linux binary, and DISABLE_AUTOUPDATER keeps a 7-second check from letting
   # the official self-updater swap the candidate out from under it.
-  if ! BUN_OPTIONS="${BUN_OPTIONS:+$BUN_OPTIONS }--preload $POLYFILL" \
-       USE_BUILTIN_RIPGREP=0 DISABLE_AUTOUPDATER=1 \
+  if ! USE_BUILTIN_RIPGREP=0 DISABLE_AUTOUPDATER=1 \
        python3 "$ROOT/tools/tui_smoke.py" "$CANDIDATE" "$SMOKE_SECONDS" > "$SMOKE_LOG" 2>&1; then
     die_kept "the staged candidate did not render a TUI: $(tail -1 "$SMOKE_LOG")"
   fi
@@ -326,12 +332,12 @@ OUT_SIZE="$(stat -c%s "$CANDIDATE")"
 GRAPH_SHA="$(sha256sum "$GRAPH_ADAPTED" | cut -d' ' -f1)"
 python3 - "$MANIFEST_NEW" "$VER" "$CLAUDE_SHA" "$OUT_VER" "$OUT_SHA" "$OUT_SIZE" \
         "$BUN_VER" "$BUN_ARCHIVE_SHA" "$BUN_SHA" "$BUN_URL" "$GRAPH_SHA" \
-        "$WORK/adapt-report.json" "$WORK/verify-graft.json" "$WORK/native-abi.json" \
-        "$WORK/tui-smoke.json" <<'PY'
+        "$WORK/adapt-report.json" "$WORK/embed-preload.json" "$WORK/verify-graft.json" \
+        "$WORK/native-abi.json" "$WORK/tui-smoke.json" <<'PY'
 import json, sys, datetime
 (path, ver, claude_sha, out_ver, out_sha, out_size, bun_ver, bun_archive_sha,
- bun_sha, bun_url, graph_sha, adapt_path, graft_path, abi_path,
- smoke_path) = sys.argv[1:16]
+ bun_sha, bun_url, graph_sha, adapt_path, embed_path, graft_path, abi_path,
+ smoke_path) = sys.argv[1:17]
 def load(p):
     with open(p) as f:
         return json.load(f)
@@ -344,7 +350,8 @@ doc = {
     "graph_sha256": graph_sha,
     # Read from the adaptation run itself, never a hardcoded list: a credential
     # that understates what the build did is worse than no credential.
-    "adaptations": load(adapt_path)["adaptations"],
+    "adaptations": load(adapt_path)["adaptations"] + ["embedded_cellsegmenter"],
+    "embedded_preload": load(embed_path),
     # What the structural check verified about this exact artifact (step 5).
     "graft": load(graft_path),
     # The native Ink surface this graph used and the polyfill was checked
@@ -380,11 +387,11 @@ if [ "${SKIP_RUN:-0}" != "1" ]; then
 fi
 python3 - "$ROOT/versions.json" "$VERSIONS_NEW" "$VER" "$CLAUDE_SHA" "$BUN_VER" \
         "$BUN_ARCHIVE_SHA" "$BUN_SHA" "$OUT_SHA" "$OUT_SIZE" "$GRAPH_SHA" "$DEVICE" \
-        "$VERIFIED_ON" "$BUN_URL" "$WORK/adapt-report.json" <<'PY'
+        "$VERIFIED_ON" "$BUN_URL" "$WORK/adapt-report.json" "$WORK/embed-preload.json" <<'PY'
 import json, sys
 (source_path, path, ver, claude_sha, bun_ver, bun_archive_sha, bun_sha,
  out_sha, out_size, graph_sha, device, verified_on, bun_url,
- adapt_path) = sys.argv[1:15]
+ adapt_path, embed_path) = sys.argv[1:16]
 try:
     doc = json.load(open(source_path))
 except (OSError, ValueError):
@@ -396,13 +403,13 @@ bun["version"] = bun_ver
 bun["archive_sha256"] = bun_archive_sha
 bun["binary_sha256"] = bun_sha
 bun["url"] = bun_url
-bun["note"] = "immutable mirrored release; update only after Android build and smoke verification"
+bun["note"] = "self-built immutable Bun bionic release; update only after Android build and direct-exec smoke verification"
 doc["verified_output"] = {
     "file": "dist/claude",
     "sha256": out_sha,
     "size": int(out_size),
     "graph_sha256": graph_sha,
-    "adaptations": json.load(open(adapt_path))["adaptations"],
+    "adaptations": json.load(open(adapt_path))["adaptations"] + ["embedded_cellsegmenter"],
     # verified_on = the built binary was executed here and reported the
     # expected version (build.sh step 5). Deeper checks (TUI, tools) stay manual.
     "device": device or None,

@@ -138,11 +138,15 @@ find () { ... ( exec -a bfs   "$_cc_bin" -S dfs ... ) }
 效果：`grep`/`find` 不再被遮蔽，Bash 使用 Termux 系统二进制；Grep 工具继续走
 `USE_BUILTIN_RIPGREP=0` + 系统 `rg`。启动耗时与未适配版一致（~0.7s）。
 
+`tools/embed_preload.py` 随后把 `CellSegmenter` 兼容实现插入 entry module 的源码，修正受影响的
+所有 graph-relative `StringPointer` 和 Offsets，并清零 entry 的 bytecode/module-info/origin。
+最终 ELF 因而无需 `BUN_OPTIONS=--preload` 或旁路 JS 文件，可直接执行并渲染首屏。
+
 ## 6. 证据
 
 - `evidence/sha256.txt`：官方二进制校验
 - `evidence/revive-1.log`：1.4.2 底座嫁接（后续段错误，记录失败路径；本地证据，不进仓库）
 - `evidence/revive-3.log`：1.4.3-canary 底座嫁接（成功；本地证据，不进仓库）
-- `dist/build-manifest.json`：每次构建的版本/哈希指纹、适配列表（取自 `adapt_graph.py`
-  的 `--report` 输出，不再靠手工维护）与 graft 自检结果（payload vaddr / 模块数 / entry）
-- `work/adapt-report.json` · `work/verify-graft.json`：上面两项的原始报告，CI 一并归档
+- `dist/build-manifest.json`：每次构建的版本/哈希指纹、适配与 preload 嵌入报告，以及 graft
+  自检结果（payload vaddr / 模块数 / entry）
+- `work/adapt-report.json` · `work/embed-preload.json` · `work/verify-graft.json`：原始报告，CI 一并归档

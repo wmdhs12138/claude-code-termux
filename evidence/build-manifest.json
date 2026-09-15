@@ -2,15 +2,27 @@
   "claude": "2.1.272",
   "claude_linux_arm64_sha256": "214a90efdd16ee0ea81132ffecced588dba394d178cc494f285ba04b5288c8de",
   "output_version": "2.1.272 (Claude Code)",
-  "output_sha256": "938550ccde93bce3359045085b272dd5976d3e0d61d9cf5a27ee6e101e2ffbdd",
-  "output_size": 227792173,
-  "graph_sha256": "1e8dc46620b7203d44af4beac3c9c9929735dd531e0b85da20e14723085809b6",
+  "output_sha256": "26e226ec17ba27666f978d37c1c7fded7f8ec967384174175926368e9517f322",
+  "output_size": 227804913,
+  "graph_sha256": "3d695929f9aa0c7fbd5d924cca861792641318d842a6662963d97d472672d86e",
   "adaptations": [
-    "search_shadow"
+    "search_shadow",
+    "embedded_cellsegmenter"
   ],
+  "embedded_preload": {
+    "preload": "cellsegmenter-polyfill.js",
+    "preload_bytes": 12740,
+    "entry_point": 5,
+    "entry_source_offset": 98916827,
+    "entry_source_bytes_before": 20511,
+    "entry_source_bytes_after": 33251,
+    "graph_bytes_before": 138745117,
+    "graph_bytes_after": 138757857,
+    "runtime_external_preload_required": false
+  },
   "graft": {
     "payload_vaddr": 89047040,
-    "payload_size": 138745117,
+    "payload_size": 138757857,
     "modules": 1913,
     "entry_point": 5,
     "flags": "0x1fff",
@@ -47,9 +59,9 @@
   },
   "base_bun": {
     "version": "1.4.3-canary.1+5fce36ebb",
-    "url": "https://github.com/wmdhs12138/claude-code-termux/releases/download/bun-base-1.4.3-canary.1-5fce36ebb/bun-linux-aarch64-android.zip",
-    "archive_sha256": "b0cb1603f905da58e9200578b12c5b36865e01ef9b353fb48f2537f5a6b0b442",
-    "binary_sha256": "53a12603767d1a83dcda98498cc926cbbbea73ae5cc2c478662e0fe5c2324160"
+    "url": "https://github.com/wmdhs12138/bun/releases/download/bionic-v1.4.3-canary.1-5fce36ebb/bun-linux-aarch64-android-5fce36ebb6.zip",
+    "archive_sha256": "ff731aeadd66f3d35b6331c08c29685284e9b08f508f5d1d44305290939a8db0",
+    "binary_sha256": "7e8b9686dcb86aea55ba06dd4aa46800189933d3ffe9d22f4209003f82f9ff74"
   },
-  "built_at": "2026-09-15T10:29:50+00:00"
+  "built_at": "2026-09-15T16:49:57+00:00"
 }

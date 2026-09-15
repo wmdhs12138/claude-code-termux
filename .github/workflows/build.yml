@@ -92,6 +92,8 @@ jobs:
             work/native-abi.json
             work/adapt-report.json
             work/adapt-report.log
+            work/embed-preload.json
+            work/embed-preload.log
             work/verify-graft.json
             work/revive-report.log
           retention-days: 7
@@ -201,6 +203,8 @@ jobs:
           reports/work/native-abi.json
           reports/work/adapt-report.json
           reports/work/adapt-report.log
+          reports/work/embed-preload.json
+          reports/work/embed-preload.log
           reports/work/verify-graft.json
           reports/work/revive-report.log"
           for f in $ASSETS; do

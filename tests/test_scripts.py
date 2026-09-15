@@ -18,6 +18,7 @@ BUILD = ROOT / "scripts" / "build.sh"
 UPDATE = ROOT / "scripts" / "update.sh"
 LAUNCHER = ROOT / "scripts" / "launcher.sh"
 POLYFILL = ROOT / "tools" / "cellsegmenter-polyfill.js"
+EMBED_PRELOAD = ROOT / "tools" / "embed_preload.py"
 
 
 class VersionValidationTests(unittest.TestCase):
@@ -347,7 +348,62 @@ class CellSegmenterPolyfillTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 
 
-class LauncherPreloadTests(unittest.TestCase):
+class EmbeddedPreloadTests(unittest.TestCase):
+    @staticmethod
+    def graph():
+        payload = bytearray()
+        records = []
+        for name, source in ((b"dep", b"export default 1"), (b"entry", b"console.log('entry')")):
+            source_at = len(payload)
+            payload += source
+            name_at = len(payload)
+            payload += name
+            records.append((name_at, len(name), source_at, len(source)))
+        modules_at = len(payload)
+        for name_at, name_len, source_at, source_len in records:
+            payload += struct.pack(
+                "<13I", name_at, name_len, source_at, source_len, *([0] * 9)
+            )
+        payload += struct.pack(
+            "<QIIIIII", len(payload), modules_at, len(records) * 52, 1, 0, 0, 0
+        )
+        payload += b"\n---- Bun! ----\n"
+        return bytes(payload)
+
+    def test_embeds_preload_in_entry_and_repairs_offsets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            graph = root / "graph.bin"
+            preload = root / "preload.js"
+            output = root / "output.bin"
+            report = root / "report.json"
+            graph.write_bytes(self.graph())
+            preload.write_text("globalThis.compat = true;")
+            proc = subprocess.run(
+                [sys.executable, str(EMBED_PRELOAD), str(graph), str(preload),
+                 str(output), "--report", str(report)],
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            data = output.read_bytes()
+            offsets_at = len(data) - 48
+            byte_count, modules_at, modules_len, entry, *_ = struct.unpack_from(
+                "<QIIIIII", data, offsets_at
+            )
+            self.assertEqual(byte_count, offsets_at)
+            self.assertEqual(modules_len, 104)
+            self.assertEqual(entry, 1)
+            entry_record = modules_at + entry * 52
+            source_at, source_len = struct.unpack_from("<II", data, entry_record + 8)
+            source = data[source_at:source_at + source_len]
+            self.assertTrue(source.startswith(b"globalThis.compat = true;"))
+            self.assertTrue(source.endswith(b"console.log('entry')"))
+            self.assertEqual(struct.unpack_from("<II", data, entry_record + 24), (0, 0))
+            self.assertFalse(json.loads(report.read_text())["runtime_external_preload_required"])
+
+
+class LauncherDirectTests(unittest.TestCase):
     def install_launcher(self, root, with_polyfill=True):
         scripts = root / "scripts"
         scripts.mkdir(parents=True)
@@ -376,26 +432,24 @@ class LauncherPreloadTests(unittest.TestCase):
             ["bash", str(launcher), "--version"], text=True, capture_output=True, env=base
         )
 
-    def test_preloads_polyfill_for_the_grafted_binary(self):
+    def test_runs_grafted_binary_without_external_preload(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "project"
             launcher = self.install_launcher(root)
             proc = self.run_launcher(launcher)
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn(
-            f"--preload {root}/tools/cellsegmenter-polyfill.js", proc.stdout
-        )
+        self.assertIn("BUN_OPTIONS=unset", proc.stdout)
         self.assertIn("args=--version", proc.stdout)
 
-    def test_keeps_user_bun_options(self):
+    def test_keeps_user_bun_options_unchanged(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "project"
             launcher = self.install_launcher(root)
             proc = self.run_launcher(launcher, {"BUN_OPTIONS": "--smol"})
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn(f"BUN_OPTIONS=--smol --preload {root}/tools/cellsegmenter-polyfill.js", proc.stdout)
+        self.assertIn("BUN_OPTIONS=--smol", proc.stdout)
 
-    def test_skips_preload_when_polyfill_is_absent(self):
+    def test_launcher_does_not_require_polyfill_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "project"
             launcher = self.install_launcher(root, with_polyfill=False)
@@ -483,10 +537,10 @@ class BuildSmokeWiringTests(unittest.TestCase):
             self.line_of('mv -f "$CANDIDATE" "$DIST/claude"'),
         )
 
-    def test_smoke_mirrors_the_launcher_environment(self):
+    def test_smoke_runs_without_external_preload(self):
         section = self.smoke_section()
-        self.assertIn("BUN_OPTIONS=", section)
-        self.assertIn("--preload $POLYFILL", section)
+        self.assertNotIn("BUN_OPTIONS=", section)
+        self.assertNotIn("--preload $POLYFILL", section)
         # The launcher forces both; the check is only faithful if it does too.
         self.assertIn("USE_BUILTIN_RIPGREP=0", section)
         self.assertIn("DISABLE_AUTOUPDATER=1", section)

@@ -49,13 +49,4 @@ export USE_BUILTIN_RIPGREP=0
 # (`claude update` is intercepted above and rebuilds locally instead.)
 export DISABLE_AUTOUPDATER=1
 
-# Claude Code >= 2.1.271 renders through Bun.ant.CellSegmenter, a native ABI
-# that only Anthropic's private @anthropic-ai/bun-internal runtime provides.
-# The grafted Android Bun does not have it, so preload a pure-JS stand-in and
-# the official Ink pipeline keeps working. Older builds never reference it.
-POLYFILL="$ROOT/tools/cellsegmenter-polyfill.js"
-if [ -r "$POLYFILL" ]; then
-  export BUN_OPTIONS="${BUN_OPTIONS:+$BUN_OPTIONS }--preload $POLYFILL"
-fi
-
 exec "$BIN" "$@"
