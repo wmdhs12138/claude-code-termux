@@ -270,6 +270,54 @@ else
   esac
 fi
 
+# 5b. Render check. The checks above prove the artifact is structurally intact
+#     and can print a version string; neither touches src/ink, so a graft whose
+#     Bun.ant.CellSegmenter is broken -- the blank-terminal failure 2.1.271
+#     introduced -- passes both and is only discovered at the user's first
+#     launch. Render a real frame here, on the candidate rather than on
+#     dist/claude, with the same preload the launcher injects. This runs only
+#     where the artifact can execute, which is the condition SKIP_RUN already
+#     encodes (the x64 CI runner cannot run an aarch64 bionic binary at all).
+SMOKE_RAN=0
+SMOKE_REASON=""
+SMOKE_SECONDS="${SMOKE_SECONDS:-7}"
+if [ "${SKIP_RUN:-0}" = "1" ]; then
+  SMOKE_REASON="SKIP_RUN=1"
+  echo "build: TUI smoke skipped ($SMOKE_REASON)" >&2
+else
+  POLYFILL="$ROOT/tools/cellsegmenter-polyfill.js"
+  if [ ! -r "$POLYFILL" ]; then
+    die_kept "tools/cellsegmenter-polyfill.js is missing; Claude >= 2.1.271 renders through it and cannot start without it"
+  fi
+  SMOKE_LOG="$WORK/tui-smoke.log"
+  # Mirror the launcher's environment exactly: same preload, and the two
+  # exports it forces. USE_BUILTIN_RIPGREP matters because the embedded rg is a
+  # linux binary, and DISABLE_AUTOUPDATER keeps a 7-second check from letting
+  # the official self-updater swap the candidate out from under it.
+  if ! BUN_OPTIONS="${BUN_OPTIONS:+$BUN_OPTIONS }--preload $POLYFILL" \
+       USE_BUILTIN_RIPGREP=0 DISABLE_AUTOUPDATER=1 \
+       python3 "$ROOT/tools/tui_smoke.py" "$CANDIDATE" "$SMOKE_SECONDS" > "$SMOKE_LOG" 2>&1; then
+    die_kept "the staged candidate did not render a TUI: $(tail -1 "$SMOKE_LOG")"
+  fi
+  SMOKE_RAN=1
+  echo "build: TUI smoke passed ($(tail -1 "$SMOKE_LOG"))" >&2
+fi
+# Record it as a credential rather than leaving it in a log: the manifest is
+# what a release is audited from, and "smoke: pass" living only in a build log
+# cannot be told apart from a build that never ran the check.
+python3 - "$WORK/tui-smoke.json" "$SMOKE_RAN" "$SMOKE_SECONDS" "$SMOKE_REASON" <<'PY'
+import json, sys
+path, ran, seconds, reason = sys.argv[1:5]
+doc = {"ran": ran == "1", "seconds": float(seconds)}
+if doc["ran"]:
+    doc["result"] = "pass"
+else:
+    doc["skipped"] = reason or "skipped"
+with open(path, "w") as f:
+    json.dump(doc, f, indent=2)
+    f.write("\n")
+PY
+
 # 6. Prepare every tracked credential before replacing the working binary.
 # Cross-file atomicity is impossible, but this makes post-promotion failures a
 # tiny sequence of local renames rather than JSON generation or disk writes.
@@ -278,10 +326,12 @@ OUT_SIZE="$(stat -c%s "$CANDIDATE")"
 GRAPH_SHA="$(sha256sum "$GRAPH_ADAPTED" | cut -d' ' -f1)"
 python3 - "$MANIFEST_NEW" "$VER" "$CLAUDE_SHA" "$OUT_VER" "$OUT_SHA" "$OUT_SIZE" \
         "$BUN_VER" "$BUN_ARCHIVE_SHA" "$BUN_SHA" "$BUN_URL" "$GRAPH_SHA" \
-        "$WORK/adapt-report.json" "$WORK/verify-graft.json" "$WORK/native-abi.json" <<'PY'
+        "$WORK/adapt-report.json" "$WORK/verify-graft.json" "$WORK/native-abi.json" \
+        "$WORK/tui-smoke.json" <<'PY'
 import json, sys, datetime
 (path, ver, claude_sha, out_ver, out_sha, out_size, bun_ver, bun_archive_sha,
- bun_sha, bun_url, graph_sha, adapt_path, graft_path, abi_path) = sys.argv[1:15]
+ bun_sha, bun_url, graph_sha, adapt_path, graft_path, abi_path,
+ smoke_path) = sys.argv[1:16]
 def load(p):
     with open(p) as f:
         return json.load(f)
@@ -300,6 +350,10 @@ doc = {
     # The native Ink surface this graph used and the polyfill was checked
     # against (step 3a), so an ABI change is visible in the release credential.
     "native_abi": load(abi_path),
+    # Whether this exact artifact actually rendered a frame (step 5b). False on
+    # an x64 CI build, which cannot execute the aarch64 binary at all -- so read
+    # it together with base_bun/device, never as "the TUI was verified".
+    "tui_smoke": load(smoke_path),
     "base_bun": {
         "version": bun_ver,
         "url": bun_url,

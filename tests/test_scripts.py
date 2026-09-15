@@ -215,12 +215,43 @@ class NativeAbiCheckTests(unittest.TestCase):
         self.assertEqual(report["native_members"],
                          ["graphemes", "paint", "segment", "sgrCloseKeys", "sgrKeys", "uris"])
         self.assertTrue(report["set_cell"])
+        self.assertTrue(report["token_seen"])
 
     def test_ignores_graphs_that_never_construct_cell_segmenter(self):
         src = b'if(typeof Bun.ant?.getPeerPid==="function")x();'
         report = self.module.analyze(self.graph([("/$bunfs/root/chunk-a.js", src)]))
         self.assertFalse(report["required"])
+        self.assertFalse(report["token_seen"])
         self.assertIn("getPeerPid", report["bun_ant_members"])
+
+    def test_rejects_cell_segmenter_under_an_unrecognized_spelling(self):
+        # A destructured or renamed reference hides every call site from the
+        # Bun.ant.* regexes. Without the token_seen guard this reported
+        # required=False and waved the build through, silently disabling the
+        # whole check -- so it has to fail instead.
+        src = b"const {CellSegmenter}=Bun.ant;new CellSegmenter({});x=this.native.segment"
+        with self.assertRaisesRegex(self.module.DriftError, "never as Bun.ant.CellSegmenter"):
+            self.module.analyze(self.graph([("/$bunfs/root/chunk-ink.js", src)]))
+
+    def test_token_elsewhere_does_not_mask_a_real_match(self):
+        # The guard must fire only when the strict spelling is absent. A graph
+        # that mentions the token in passing *and* constructs the real thing is
+        # an ordinary 2.1.271+ graph and has to keep building.
+        strict = (
+            b"new Bun.ant.CellSegmenter({});"
+            b"x=this.native.segment;y=this.native.paint;a=this.native.graphemes;"
+            b"b=this.native.sgrKeys;c=this.native.sgrCloseKeys;d=this.native.uris"
+        )
+        report = self.module.analyze(
+            self.graph(
+                [
+                    ("/$bunfs/root/chunk-ink.js", strict),
+                    ("/$bunfs/root/chunk-notes.js", b"// CellSegmenter is declared by the runtime"),
+                ]
+            )
+        )
+        self.assertTrue(report["required"])
+        self.assertTrue(report["token_seen"])
 
     def test_rejects_unknown_bun_ant_interface(self):
         src = b'new Bun.ant.CellSegmenter({}); Bun.ant.TerminalReader'
@@ -415,6 +446,66 @@ class TuiSmokeTests(unittest.TestCase):
         proc = self.run_fixture("print('Claude Code', flush=True)\n")
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("exited before", proc.stderr)
+
+
+class BuildSmokeWiringTests(unittest.TestCase):
+    """Wiring checks on scripts/build.sh.
+
+    A behavioural test would have to stub every tool the build drives, and would
+    then break on any unrelated change to build.sh. These assert only the
+    properties that decide whether a candidate that renders nothing can reach
+    dist/claude -- which is the failure 2.1.271 shipped.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.script = BUILD.read_text()
+        cls.lines = cls.script.splitlines()
+
+    def line_of(self, needle):
+        for i, line in enumerate(self.lines):
+            if needle in line:
+                return i
+        self.fail(f"{needle!r} not found in build.sh")
+
+    def smoke_section(self):
+        start = self.line_of("# 5b. Render check.")
+        return "\n".join(self.lines[start:self.line_of("tui-smoke.json")])
+
+    def test_smoke_runs_on_the_candidate_not_the_installed_binary(self):
+        line = self.lines[self.line_of("tui_smoke.py")]
+        self.assertIn('"$CANDIDATE"', line)
+        self.assertNotIn('"$DIST/claude"', line)
+
+    def test_smoke_runs_before_the_candidate_is_promoted(self):
+        self.assertLess(
+            self.line_of("tui_smoke.py"),
+            self.line_of('mv -f "$CANDIDATE" "$DIST/claude"'),
+        )
+
+    def test_smoke_mirrors_the_launcher_environment(self):
+        section = self.smoke_section()
+        self.assertIn("BUN_OPTIONS=", section)
+        self.assertIn("--preload $POLYFILL", section)
+        # The launcher forces both; the check is only faithful if it does too.
+        self.assertIn("USE_BUILTIN_RIPGREP=0", section)
+        self.assertIn("DISABLE_AUTOUPDATER=1", section)
+
+    def test_smoke_is_skipped_where_the_binary_cannot_execute(self):
+        section = self.smoke_section()
+        guard = 'if [ "${SKIP_RUN:-0}" = "1" ]; then'
+        self.assertIn(guard, section)
+        # Inside the else branch, not before the guard: on x64 CI the candidate
+        # cannot run at all, and a bare invocation would fail the whole build.
+        self.assertLess(section.index(guard), section.index("tui_smoke.py"))
+        self.assertIn("TUI smoke skipped", section)
+
+    def test_a_failed_render_check_keeps_the_working_binary(self):
+        section = self.smoke_section()
+        self.assertIn("die_kept", section)
+
+    def test_manifest_records_whether_the_render_check_ran(self):
+        self.assertIn('"tui_smoke": load(smoke_path)', self.script)
 
 
 class ReleaseNotesTests(unittest.TestCase):

@@ -18,6 +18,12 @@ Checks:
   * setCell() is reported but not required: it is part of the ABI and the
     polyfill implements it, yet current src/ink only uses it for the ellipsis
     path.
+  * A graph that mentions CellSegmenter without ever spelling out
+    Bun.ant.CellSegmenter is a reference-style change, not a pre-2.1.271 graph.
+    The regexes below are written against today's spelling, so a destructured
+    or renamed reference would hide every call site and this check would
+    cheerfully report "no CellSegmenter" -- the exact silent pass it exists to
+    prevent. That case fails instead.
 
 Usage: check_native_abi.py <graph.bin> [--report report.json]
 """
@@ -39,6 +45,10 @@ KNOWN_NATIVE = REQUIRED_NATIVE | {'setCell'}
 
 BUN_ANT_MEMBER = re.compile(rb'Bun\.ant\??\.([A-Za-z_$][\w$]*)')
 CELL_SEGMENTER = re.compile(rb'Bun\.ant\??\.CellSegmenter')
+# Deliberately loose: any mention at all, however it is spelled. Used only to
+# tell "this graph predates the ABI" apart from "the ABI is here but this check
+# can no longer see its call sites".
+CELL_SEGMENTER_TOKEN = re.compile(rb'CellSegmenter')
 NATIVE_MEMBER = re.compile(rb'\.native\.([A-Za-z_$][\w$]*)')
 SET_CELL = re.compile(rb'\.setCell\s*\(')
 
@@ -64,11 +74,16 @@ def analyze(data):
     cell_modules = []
     native = set()
     set_cell = False
+    token_seen = False
     for i in range(count):
         rec = mod_off + i * stride
         name_off, name_len, src_off, src_len = struct.unpack_from('<IIII', data, rec)
         name = data[name_off:name_off + name_len].decode('utf-8', 'replace')
         src = data[src_off:src_off + src_len]
+        # Checked before the `continue` below: a module that mentions the type
+        # without a Bun.ant.* read is exactly the shape a rename produces.
+        if not token_seen and CELL_SEGMENTER_TOKEN.search(src):
+            token_seen = True
         members = {m.group(1).decode() for m in BUN_ANT_MEMBER.finditer(src)}
         if not members:
             continue
@@ -84,6 +99,7 @@ def analyze(data):
         'bun_ant_members': sorted(bun_ant),
         'native_members': sorted(native),
         'set_cell': set_cell,
+        'token_seen': token_seen,
         'polyfill': 'tools/cellsegmenter-polyfill.js',
     }
 
@@ -93,6 +109,12 @@ def analyze(data):
             'new Bun.ant interface(s) ' + ', '.join(sorted(unknown_ant)) +
             ' appeared; the CellSegmenter polyfill does not implement them')
     if not cell_modules:
+        if token_seen:
+            raise DriftError(
+                'the graph mentions CellSegmenter but never as Bun.ant.CellSegmenter; '
+                'the reference style changed, so the call sites are invisible to this '
+                'check and the polyfill may no longer match the ABI. Find the new '
+                'spelling in the graph and update check_native_abi.py before shipping')
         return report
 
     missing = REQUIRED_NATIVE - native
@@ -133,7 +155,7 @@ def main():
               ', '.join(report['native_members']) +
               (' + setCell' if report['set_cell'] else '') + ')')
     else:
-        print('native-abi: no Bun.ant.CellSegmenter in this graph (pre-2.1.271)')
+        print('native-abi: no CellSegmenter anywhere in this graph (pre-2.1.271)')
 
     if report_path:
         with open(report_path, 'w') as f:

@@ -37,7 +37,13 @@
       "uris"
     ],
     "set_cell": true,
+    "token_seen": true,
     "polyfill": "tools/cellsegmenter-polyfill.js"
+  },
+  "tui_smoke": {
+    "ran": true,
+    "seconds": 7.0,
+    "result": "pass"
   },
   "base_bun": {
     "version": "1.4.3-canary.1+5fce36ebb",
@@ -45,5 +51,5 @@
     "archive_sha256": "b0cb1603f905da58e9200578b12c5b36865e01ef9b353fb48f2537f5a6b0b442",
     "binary_sha256": "53a12603767d1a83dcda98498cc926cbbbea73ae5cc2c478662e0fe5c2324160"
   },
-  "built_at": "2026-09-15T10:06:15+00:00"
+  "built_at": "2026-09-15T10:29:50+00:00"
 }
