@@ -17,6 +17,14 @@
 
 (function () {
   if (typeof Bun === "undefined") return;
+  // A directly-executed Android standalone has no launcher to provide these
+  // safety defaults. Preserve explicit user choices, but otherwise avoid the
+  // embedded Linux/glibc ripgrep and the updater that would replace this
+  // bionic executable with an official glibc build.
+  if (typeof process !== "undefined" && process.platform === "android") {
+    if (process.env.USE_BUILTIN_RIPGREP === undefined) process.env.USE_BUILTIN_RIPGREP = "0";
+    if (process.env.DISABLE_AUTOUPDATER === undefined) process.env.DISABLE_AUTOUPDATER = "1";
+  }
   if (!Bun.ant) {
     try {
       Bun.ant = {};

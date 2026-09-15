@@ -347,6 +347,12 @@ class CellSegmenterPolyfillTests(unittest.TestCase):
         proc = subprocess.run([exe, "--check", str(POLYFILL)], text=True, capture_output=True)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 
+    def test_embeds_direct_exec_android_defaults(self):
+        source = POLYFILL.read_text()
+        self.assertIn('process.platform === "android"', source)
+        self.assertIn('process.env.USE_BUILTIN_RIPGREP === undefined', source)
+        self.assertIn('process.env.DISABLE_AUTOUPDATER === undefined', source)
+
 
 class EmbeddedPreloadTests(unittest.TestCase):
     @staticmethod
