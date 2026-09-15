@@ -1,167 +1,266 @@
 # claude-code-termux
 
-最新版 Claude Code 的原生 Termux 移植：**零 glibc、零 ptrace、零 proot**，单个 bionic ELF 直接 `execve`。
+在 Termux/Android 上原生运行最新版 Claude Code：**Bionic AArch64、单 ELF 直启、可用
+`claude update` 自更新**。
 
-> **English**: Run the latest Claude Code natively on Termux/Android (bionic).
-> No glibc, no ptrace, no proot — a self-contained bionic ELF produced by
-> grafting Claude's patched Bun standalone graph onto an Android Bun runtime.
+不需要 glibc、proot、ptrace、Node.js，也不依赖 shell launcher、外部 preload 或
+`BUN_OPTIONS`。最终的 `claude` 可以由 Android linker 直接 `execve`。
 
-## 状态
+> **English:** Native Claude Code for Termux/Android. This project extracts and
+> adapts the official Bun standalone module graph, then grafts it onto a
+> self-built Bionic AArch64 Bun runtime. The result is one directly executable,
+> self-updating ELF.
 
 [![Claude Code](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fwmdhs12138%2Fclaude-code-termux%2Fmain%2Fversions.json&query=%24.claude&label=Claude%20Code&color=blue)](https://github.com/wmdhs12138/claude-code-termux/releases)
-[![build](https://github.com/wmdhs12138/claude-code-termux/actions/workflows/build.yml/badge.svg)](https://github.com/wmdhs12138/claude-code-termux/actions/workflows/build.yml)
+[![toolchain](https://github.com/wmdhs12138/claude-code-termux/actions/workflows/build.yml/badge.svg)](https://github.com/wmdhs12138/claude-code-termux/actions/workflows/build.yml)
+[![Bun Bionic](https://github.com/wmdhs12138/bun/actions/workflows/bionic-aarch64.yml/badge.svg)](https://github.com/wmdhs12138/bun/actions/workflows/bionic-aarch64.yml)
 
-已在 Android 16 / aarch64 实机验证：对话往返、Bash / Read / Grep / find、TUI、`/exit` 干净退出。
-产物哈希与校验和见 [Releases](https://github.com/wmdhs12138/claude-code-termux/releases)。
+## 当前状态
 
-## 原理
+- Claude Code：`2.1.272`
+- Bun 底座：`1.4.3-canary.1+5fce36ebb`
+- 目标平台：Android 9+（API 28+）/ AArch64 / Bionic
+- 实机验证：Android 16 / AArch64
+- 已验证功能：登录与对话、TUI、Bash、Read、Grep、系统 `find`/`grep`、`/exit`
+- 已验证更新：`claude update --check` 与完整 `claude update --force`
 
-官方 Claude Code 是 Bun 编译的 **glibc** 单文件程序，Termux（bionic）跑不了。本项目把官方二进制里
-内嵌的 **standalone 模块图**取出、适配，再嫁接到自行编译的 Android Bun 运行时上：
+版本、输入哈希和实机产物哈希统一记录在 [`versions.json`](versions.json)。
 
+## 它是怎么工作的
+
+官方 Linux AArch64 Claude Code 是 Bun 生成的 glibc standalone，不能直接在 Termux 的
+Bionic 环境运行。本项目不重新编译 Claude 源码，而是移植官方二进制中携带的 Bun 模块图：
+
+```text
+Anthropic 官方 Claude Code（Linux AArch64 / glibc）
+                         │
+                         │ 提取 .bun standalone 模块图
+                         ▼
+                Claude JavaScript 模块图
+                         │
+                         ├─ 关闭 bfs/ugrep shell 遮蔽
+                         ├─ 回填 Bun.ant.CellSegmenter ABI
+                         ├─ 内置 Android 运行默认值
+                         ├─ 注入 Bionic 自更新入口
+                         └─ 修正 StringPointer / bytecode 元数据
+                         │
+                         ▼
+        自编译 Bun 1.4.3+（Android Bionic AArch64）
+                         │
+                         │ 模块图嫁接 + ELF PT_LOAD 修复
+                         ▼
+                 dist/claude（单一 ELF）
+                         │
+                         ▼
+             Android linker 直接 execve
 ```
-downloads.claude.ai/…/linux-arm64/claude   (glibc, Bun 1.4.3)
-        │  tools/extract_graph.py   定位 .bun 节，取 [u64 len][graph]
-        ▼
-claude-graph.bin   (~1864 modules, ~136 MB, 含源码)
-        │  adapt_graph.py + embed_preload.py   兼容补丁内嵌入口模块
-        │  revive_patch.py                     BUN_COMPILED.size + PT_LOAD 手术
-        ▼
-Patched Android Bun (bionic ELF) ──►  dist/claude   (自包含单 ELF, 228 MB)
-```
 
-模块图里的字节码与底座版本不符时，运行时会自动回退到内嵌源码。格式细节见 [docs/format.md](docs/format.md)。
+因此，“Bionic Claude Code”准确地说是：**官方 Claude 模块图 + Termux 兼容层 + 自编译
+Bionic Bun 运行时**。项目不包含、也无法获取 Claude Code 的闭源源码。
 
-## 适配：关闭 bfs/ugrep shell 遮蔽
-
-官方二进制带原生 prelude，内嵌 bfs/ugrep 并开启 `searchToolsOptIn()`，于是 Claude Code 会往 Bash
-会话注入 `find`/`grep` shell 函数，把调用重定向回 CLI 二进制。嫁接产物没有 prelude，这些函数会以
-`-G` 调用普通 CLI 并报 `unknown option '-G'`。
-
-`tools/adapt_graph.py` 按 `searchToolsOptIn()` 读取行为定位该开关（不依赖每版会变化的压缩函数名），
-把它改成返回 true，并让所在模块强制源码编译；`find`/`grep` 即回退 Termux 系统二进制。只影响
-shell 快照生成，启动开销可忽略。
-
-## 适配：回填 Bun.ant.CellSegmenter
-
-从 2.1.271 起，Ink 的文本布局与绘制改用了 `@anthropic-ai/bun-internal` 的原生接口
-`Bun.ant.CellSegmenter`（grapheme 切分、SGR/OSC8 解析、按 cell 包装与绘制）。官方
-Android Bun 底座没有这个接口，首屏渲染在 `showSetupScreens()` 里抛错又被空 Suspense
-吞掉，表现就是终端空白。
-
-`tools/cellsegmenter-polyfill.js` 用 `Intl.Segmenter` + `Bun.stringWidth` 实现了同一套
-ABI（`segment` / `paint` / `setCell` 及 `graphemes`/`sgrKeys`/`uris` 池）。构建时
-`tools/embed_preload.py` 把实现写入 standalone 入口模块，并清除该入口旧的 bytecode/module-info；
-因此 `dist/claude` 自己完成初始化，可直接执行，不依赖 launcher、外部 JS 文件或 `BUN_OPTIONS`。
-
-接口是私有的、没有上游变更日志，所以构建期有防漂移闸门：`tools/check_native_abi.py` 扫描
-模块图里实际用到的 `Bun.ant.*` 和 `CellSegmenter` 原生成员，与 polyfill 的 ABI 白名单比对，
-新增/缺失/改名都会让 `make build` 在嫁接前失败，结果写进 `native-abi.json` 并随 release 凭证
-一起发布。
+底层 `.bun` 布局、模块记录、trailer 和嫁接过程见 [`docs/format.md`](docs/format.md)。
 
 ## 快速开始
 
-Termux（F-Droid/GitHub 版）、aarch64、Android 9+（API 28+）、`pkg install python3 unzip curl ripgrep util-linux`。
-自更新还使用 Termux 基础环境自带的 `bash`、`tar`、`awk`、`mktemp` 和 SHA-256 工具。
+### 1. 准备环境
+
+使用 F-Droid 或 GitHub 发布的 Termux，在 AArch64 设备上安装依赖：
+
+```bash
+pkg update
+pkg install git make python3 unzip curl ripgrep util-linux
+```
+
+构建和自更新还会使用 Termux 基础环境里的 `bash`、`tar`、`awk`、`mktemp` 与 SHA-256
+工具。
+
+### 2. 本地构建
 
 ```bash
 git clone https://github.com/wmdhs12138/claude-code-termux.git ~/claude-code-termux
 cd ~/claude-code-termux
-make build          # 下载官方二进制 + 校验 + 提取 + 嫁接 + 自检
-make install        # 安装到 ~/bin/claude（同名文件会被覆盖，先自行备份）
-claude              # TUI
+make test
+make build VERSION=latest
 ```
 
-更新用 `claude update`（`--check` 只检查，`--force` 强制重建）。拦截器已经嵌入最终 ELF：它查询
-官方最新版本，解析本仓库 `main` 的不可变 commit，在 Termux 缓存目录下载对应工具链、构建并验证
-新的 bionic 候选，最后原子替换当前可执行文件。任一步失败都会保留旧 ELF；不会调用那个会下载
-glibc 产物的官方自更新器。直接执行 `dist/claude update` 同样有效，不要求 launcher。
+`make build` 会依次完成官方下载与校验、模块图提取、ABI 防漂移检查、兼容层注入、ELF
+嫁接、闭环校验、版本检查和真实 TUI smoke test。成功产物位于 `dist/claude`。
 
-### 账号与模型
+### 3. 安装单 ELF
 
-launcher 不设置任何账号、模型或端点，全部沿用官方默认。自定义写本地覆盖文件（不进仓库）。它最先被
-source，所以除了 `ANTHROPIC_*`，也能覆盖 launcher 自己的 `CLAUDE_CODE_TERMUX_ROOT` / `_BIN`：
+推荐把构建产物直接放进 `~/bin`：
 
 ```bash
-# ~/.config/claude-code/env.sh   （可用 $CLAUDE_CODE_TERMUX_ENV 换路径）
-export ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic"
-export ANTHROPIC_AUTH_TOKEN="sk-..."
-export ANTHROPIC_MODEL="deepseek-flash"
+mkdir -p ~/bin
+cp -p ~/bin/claude ~/bin/claude.backup 2>/dev/null || true
+cp dist/claude ~/bin/claude
+chmod 700 ~/bin/claude
+hash -r
+claude --version
 ```
 
-## 兼容默认值（最终 ELF 已内置）
+确保 shell 的 `PATH` 包含 `~/bin`。这条路径中安装的是约 228 MB 的真实 Bionic ELF，
+不是转发到项目目录的脚本。
 
-| 变量 | 作用 |
+## 直接自更新
+
+更新器已经注入最终 ELF，不需要保留仓库副本或 launcher：
+
+```bash
+claude update --check   # 只检查并报告状态，不修改文件
+claude update           # 有新版时下载、重建并替换
+claude update --force   # 当前已是最新版也强制重建
+```
+
+更新链路如下：
+
+```text
+claude update
+      │
+      ├─ 查询 downloads.claude.ai 的 latest
+      ├─ 解析本仓库 main 对应的不可变 commit
+      ├─ 下载该 commit 的工具链源码包
+      ├─ 下载并校验官方 Claude 与固定 Bionic Bun
+      ├─ 在 Termux 缓存目录构建新的候选 ELF
+      ├─ 校验候选版本并再次执行版本探针
+      └─ 在目标目录内原子替换当前 claude
+```
+
+缓存位于 `${XDG_CACHE_HOME:-$HOME/.cache}/claude-code-termux/self-update`。任何下载、构建
+或校验失败都会保留旧 ELF。这里不会调用 Claude 官方自更新器，因为它下载的 glibc 产物会破坏
+Termux 安装。
+
+## 内置兼容层
+
+### 搜索工具
+
+官方 standalone 的原生 prelude 会把 Bash 中的 `find`/`grep` 遮蔽到内嵌 bfs/ugrep。嫁接后的
+运行时没有对应 Linux prelude，继续注入这些函数会产生 `unknown option '-G'`。
+
+[`tools/adapt_graph.py`](tools/adapt_graph.py) 按 `searchToolsOptIn()` 的行为特征定位开关，使 Claude
+回退到 Termux 的系统搜索工具，不依赖每个版本都会变化的压缩函数名。
+
+### `Bun.ant.CellSegmenter`
+
+Claude Code 2.1.271 起，Ink 的文本布局使用私有接口 `Bun.ant.CellSegmenter`。普通 Android Bun
+没有该接口，错误又会被启动界面的 Suspense 吞掉，最终表现为 TUI 白屏。
+
+[`tools/cellsegmenter-polyfill.js`](tools/cellsegmenter-polyfill.js) 使用 `Intl.Segmenter` 和
+`Bun.stringWidth` 实现所需 ABI。构建时，[`tools/embed_preload.py`](tools/embed_preload.py) 把它
+直接写入 standalone 入口模块并修正所有相对指针，因此运行时没有外部 JS 依赖。
+
+[`tools/check_native_abi.py`](tools/check_native_abi.py) 会把 Claude 实际使用的 `Bun.ant.*` 和
+CellSegmenter 成员与白名单比较。接口新增、删除或改名时构建立刻失败，避免生成“能显示版本、打开
+TUI 却白屏”的假成功产物。
+
+### Android 默认值
+
+最终 ELF 会在 Android 上内置以下默认行为，无需用户导出环境变量：
+
+| 等效设置 | 作用 |
 |---|---|
-| `USE_BUILTIN_RIPGREP=0` | 默认内置：内嵌 ripgrep 是 Linux 二进制，强制用系统 `rg` |
-| `DISABLE_AUTOUPDATER=1` | 默认内置：禁用会下载 glibc 产物的官方自更新器；由嵌入式 Bionic 更新器接管 `claude update` |
+| `USE_BUILTIN_RIPGREP=0` | 使用 Termux 的 `rg`，不执行内嵌 Linux ripgrep |
+| `DISABLE_AUTOUPDATER=1` | 禁用 glibc 官方更新器，由嵌入式 Bionic 更新器接管 |
+
+账号、模型、API 端点和代理设置没有被改写，仍使用 Claude Code 官方行为。需要自定义时直接在
+shell 配置中设置相应的 `ANTHROPIC_*` 环境变量。
+
+## 构建可信度与可复现性
+
+[`versions.json`](versions.json) 锁定以下内容：
+
+- 官方 Claude Code 版本和 Linux AArch64 SHA-256
+- Bionic Bun 的不可变 release URL、压缩包 SHA-256 和二进制 SHA-256
+- 最终 ELF、嫁接模块图的 SHA-256 与文件大小
+- 最后一次 Android 实机验证的平台和日期
+
+构建在替换 `dist/claude` 前完成全部检查；固定输入的哈希不一致时会停止并保留旧产物。底座 Bun
+来自 [`wmdhs12138/bun`](https://github.com/wmdhs12138/bun) 的版本化 release，不跟随会原地变化的
+滚动 canary。
+
+评估新 Bun 底座时必须显式执行：
+
+```bash
+BUN_URL=<candidate-url> make refresh-base
+```
+
+只有候选在 Android 上通过直接执行和 TUI 验证后，才应更新锁文件。
+
+## CI、Action 与发布
+
+本仓库的 CI 每日检查最新版 Claude，运行回归测试，并在 x64 runner 上完成模块图和 graft 结构
+校验。由于 runner 不能执行 AArch64/Bionic 文件，它只发布小型文本凭证和工具链 tag，**不发布
+Claude 二进制**。
+
+Bun fork 的 [`bionic-aarch64.yml`](https://github.com/wmdhs12138/bun/actions/workflows/bionic-aarch64.yml)
+使用原生 ARM64 runner 从源码构建 Bionic Bun；手动启用 `build_claude` 时，还会用指定版本和不可变
+工具链 commit 生成短期 Claude Action artifact。该产物只用于拥有相应使用权的个人验证，不进入
+长期 Release。
+
+工具链 tag 格式为 `toolchain-v<N>-<fingerprint>`。指纹由 `scripts/`、`tools/` 和 `.github/`
+全部已跟踪内容计算，可在本地复算：
+
+```bash
+make fingerprint
+```
+
+## 常用维护命令
+
+```bash
+make test                    # 工具链回归测试
+make build VERSION=latest    # 构建并在当前 Android 设备验证
+make verify                  # 输出 dist/claude 版本
+make smoke                   # 运行 7 秒 TUI smoke test
+make fingerprint             # 计算工具链指纹
+make clean                   # 删除模块图和最终 ELF
+make distclean               # 删除全部下载缓存和构建产物（约 1 GB）
+```
 
 ## 仓库结构
 
+```text
+Makefile                  构建、验证和维护入口
+versions.json             输入与实机产物锁定信息
+scripts/build.sh          完整构建事务
+scripts/fetch-claude.sh   官方版本解析、下载和校验
+scripts/update.sh         旧 launcher 的兼容更新入口
+scripts/launcher.sh       旧安装方式的兼容 launcher
+tools/extract_graph.py    提取官方 .bun standalone 图
+tools/adapt_graph.py      搜索工具兼容改写
+tools/embed_preload.py    把 Android 兼容层注入入口模块
+tools/check_native_abi.py 私有 Bun.ant ABI 防漂移检查
+tools/revive_patch.py     模块图嫁接和 ELF 修复
+tools/verify_graft.py     graft 闭环验证
+tools/tui_smoke.py        PTY/TUI 实机启动测试
+docs/format.md            Bun standalone 格式逆向记录
+evidence/                 最近一次实机构建凭证
 ```
-Makefile                  build / fetch / verify / smoke / install
-versions.json             版本与哈希锁定，构建后自动刷新
-scripts/                  fetch-claude.sh · build.sh · update.sh · launcher.sh
-tools/                    extract_graph.py · adapt_graph.py · embed_preload.py · verify_graft.py
-                          revive_patch.py · bunsec.py / graph.py · tui_smoke.py
-                          cellsegmenter-polyfill.js（构建时嵌入，见上）
-                          check_native_abi.py（构建期 ABI 防漂移，见上）
-docs/format.md            .bun 节格式逆向笔记
-evidence/                 构建与验证日志
-.github/                  workflows/build.yml · release_notes.py
-```
-
-## CI 与 Release
-
-每天定时 + 手动触发，两个 job：`build`（`contents: read`）跑全流程，并做 graft 闭环自检
-（`verify_graft.py`：`.bun` size 字段 → payload → trailer → 模块表）。x64 runner 执行不了
-aarch64 产物，这是唯一能自动把关的地方；实机验证仍靠 `make build` 后自己跑。
-`release`（`contents: write`）只下载文本报告发 release。**"不发二进制"是结构保证**：build 没有
-发布权限，release 拒绝任何 > 1 MiB 的 asset。产物是 Anthropic 专有代码的修改副本，上传即分发。
-
-| tag | 触发 | 内容 |
-|---|---|---|
-| `v<claude 版本>` | 官方 `latest` 变了 | 官方校验和、产物/图 sha256、底座 Bun 哈希、复现命令 + 文本报告 |
-| `toolchain-v<N>-<指纹>` | `scripts/` + `tools/` + `.github/` 内容变了 | 工具链能力、格式兼容范围、变更列表 |
-
-指纹是 `scripts/` + `tools/` + `.github/`（含发布 note 的生成器）全部内容的 sha256 前 7 位，
-直接写进 tag，所以编号不会与代码漂移；`make fingerprint` 本地可复算，应与 tag 后缀一致。
-release notes 区分 CI 结构校验（产物未被执行）与实机验证（见 `versions.json`）：两者 sha256 一致时
-说"可复现"；固定输入下若不一致则明确警告。需要产物请自己 `make build`。
-
-## 版本与底座锁定
-
-`versions.json` 同时锁定 Claude 官方 sha256、底座 Bun revision、下载包 sha256、解压后二进制
-sha256 和最终产物 sha256。底座下载地址指向 [Bun bionic fork](https://github.com/wmdhs12138/bun)
-的**不可变版本化 release**，不会再因
-upstream 的滚动 `canary` tag 原地换包而让定时构建随机失败。镜像只包含 MIT 许可的 Bun Android
-运行时，不包含 Claude Code。
-
-普通 `make build` 会严格核对全部哈希，不一致时在替换现有产物前停止。评估新版 Bun 时，显式传入
-upstream URL 并运行 `BUN_URL=<url> make refresh-base`；只有 Android 实机构建和验证全部成功后
-才会更新锁文件。回收全部缓存（`work/` 约 1 GB）使用 `make distclean`。
 
 ## 已知限制
 
-- Claude 模块图当前要求 Bun ≥ 1.4.3 的格式；升级底座前必须重新做实机兼容性验证。
-- 内嵌 ripgrep / 自动更新不可用（launcher 已绕过）。
-- 产物约 228 MB，未压缩；如需可自行 UPX。
-- 未在 Android 9 以下、非 aarch64 设备验证。
+- 只验证了 AArch64、Android 9+；不支持 32 位 ARM、x86 或 Android 8 及以下。
+- 当前模块图格式要求 Bun 1.4.3 或兼容版本；不能随意替换 Bun 底座。
+- `Bun.ant.*` 是 Anthropic 私有 ABI，上游升级可能触发防漂移构建失败，需要补充兼容层。
+- 最终 ELF 约 228 MB；自更新需要下载官方 Claude、Bionic Bun 和工具链，首次更新会占用较多流量与
+  缓存空间。
+- 内嵌 Linux ripgrep 不可用，项目固定使用 Termux 的 `ripgrep` 包。
 
-## 法律
+## 法律与分发
 
-源码树只含工具链，不含任何 Anthropic 代码；`make build` 从官方 CDN 下载并在本地处理。基础依赖
-镜像仅包含 MIT 许可的 Bun Android 运行时。Claude Code 是 Anthropic 的闭源产品，请遵守其服务
-条款；嫁接产物**仅供个人研究使用，请勿再分发**。
+本仓库只包含 MIT 工具链，不包含 Anthropic 的程序代码。构建时由用户设备从官方 CDN 下载 Claude
+Code 并在本地处理。Claude Code 是 Anthropic 的闭源产品，请遵守其许可与服务条款。
+
+生成的 ELF 是 Anthropic 专有程序的修改副本，**仅供个人研究与自用，请勿重新分发**。Bionic Bun
+底座本身是 MIT 软件，可以单独发布；这也是 Bun release 与 Claude Action artifact 分开的原因。
 
 ## 致谢
 
-- [Hope2333/opencode-termux](https://github.com/Hope2333/opencode-termux)：`revive_patch.py` 及
-  `BUN_COMPILED.size` 移植手术方案（MIT）
-- [oven-sh/bun](https://github.com/oven-sh/bun)：官方 Android bionic 构建
+- [Hope2333/opencode-termux](https://github.com/Hope2333/opencode-termux)：
+  `BUN_COMPILED.size` 和 PT_LOAD 移植方法（MIT）
+- [oven-sh/bun](https://github.com/oven-sh/bun)：Bun 与 Android Bionic 构建支持
 - [Anthropic Claude Code](https://github.com/anthropics/claude-code)
 - [Termux](https://github.com/termux/termux-app)
 
 ## License
 
-MIT（仅工具链）。vendored 文件遵循其原始 MIT 许可，见 [LICENSE](LICENSE)。
+MIT，仅适用于本仓库工具链。Vendored 文件继续遵循各自的原始许可证，见 [`LICENSE`](LICENSE)。
