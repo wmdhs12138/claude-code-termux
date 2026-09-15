@@ -45,6 +45,7 @@ set -euo pipefail
 target="$1"
 force="$2"
 check="$3"
+cache_base="$4"
 
 latest="$(curl -fsSL --max-time 30 https://downloads.claude.ai/claude-code-releases/latest)"
 case "$latest" in
@@ -66,7 +67,7 @@ if [ "$force" != "1" ] && [ "$current" = "$latest" ]; then
   exit 0
 fi
 
-cache_root="\${XDG_CACHE_HOME:-$HOME/.cache}/claude-code-termux/self-update"
+cache_root="$cache_base/claude-code-termux/self-update"
 mkdir -p "$cache_root"
 commit="$(curl -fsSL --max-time 30 https://api.github.com/repos/wmdhs12138/claude-code-termux/commits/main \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])')"
@@ -116,6 +117,7 @@ echo "Claude Code updated successfully: $current -> $latest"
           process.execPath,
           updateForce ? "1" : "0",
           updateCheck ? "1" : "0",
+          process.env.XDG_CACHE_HOME || (process.env.HOME ? process.env.HOME + "/.cache" : "/data/local/tmp"),
         ],
         stdin: "inherit",
         stdout: "inherit",

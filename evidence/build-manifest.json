@@ -2,27 +2,27 @@
   "claude": "2.1.272",
   "claude_linux_arm64_sha256": "214a90efdd16ee0ea81132ffecced588dba394d178cc494f285ba04b5288c8de",
   "output_version": "2.1.272 (Claude Code)",
-  "output_sha256": "e78ccd7b34ce65e601bb1cf377f7de08dd0be664bc1a883b5312149841b7da53",
-  "output_size": 227808930,
-  "graph_sha256": "7b701582b012ddf345ebc5c541f051ba5af275192af70d04b63746a8c897c9e6",
+  "output_sha256": "ed7932c9aaa8d4128668351ce30a3a4bfc7ea3a084911b8c8b8160b95094882f",
+  "output_size": 227809036,
+  "graph_sha256": "c2a2f74bcf6c845e016c33294af38fb08dd29f56b8e916c7a74b33c372901ef1",
   "adaptations": [
     "search_shadow",
     "embedded_cellsegmenter"
   ],
   "embedded_preload": {
     "preload": "cellsegmenter-polyfill.js",
-    "preload_bytes": 16757,
+    "preload_bytes": 16863,
     "entry_point": 5,
     "entry_source_offset": 98916827,
     "entry_source_bytes_before": 20511,
-    "entry_source_bytes_after": 37268,
+    "entry_source_bytes_after": 37374,
     "graph_bytes_before": 138745117,
-    "graph_bytes_after": 138761874,
+    "graph_bytes_after": 138761980,
     "runtime_external_preload_required": false
   },
   "graft": {
     "payload_vaddr": 89047040,
-    "payload_size": 138761874,
+    "payload_size": 138761980,
     "modules": 1913,
     "entry_point": 5,
     "flags": "0x1fff",
@@ -63,5 +63,5 @@
     "archive_sha256": "ff731aeadd66f3d35b6331c08c29685284e9b08f508f5d1d44305290939a8db0",
     "binary_sha256": "7e8b9686dcb86aea55ba06dd4aa46800189933d3ffe9d22f4209003f82f9ff74"
   },
-  "built_at": "2026-09-15T17:23:28+00:00"
+  "built_at": "2026-09-15T17:24:31+00:00"
 }
