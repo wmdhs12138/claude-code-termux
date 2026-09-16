@@ -412,6 +412,59 @@ class CellSegmenterPolyfillTests(unittest.TestCase):
         self.assertIn('updateArgs.indexOf("--check")', source)
         self.assertIn('updateArgs.indexOf("--force")', source)
 
+    def test_self_update_prunes_only_old_toolchain_caches(self):
+        source = POLYFILL.read_text()
+        self.assertIn('printenv CLAUDE_CODE_TERMUX_CACHE_KEEP', source)
+        self.assertIn('toolchain-[0-9a-f]{40}', source)
+        self.assertIn('path.is_symlink()', source)
+        self.assertIn('entries[keep:]', source)
+        self.assertIn('run_cache_cleanup "$cache_root" "$(basename "$source_dir")"', source)
+
+    def test_self_update_never_prunes_during_check_or_before_build(self):
+        source = POLYFILL.read_text()
+        check_exit = source.index('if [ "$check" = "1" ]')
+        cache_root = source.index('cache_root="$cache_base/claude-code-termux/self-update"')
+        build = source.index('(cd "$source_dir" && bash scripts/build.sh "$latest")')
+        post_install_cleanup = source.index(
+            'run_cache_cleanup "$cache_root" "$(basename "$source_dir")"'
+        )
+        self.assertLess(check_exit, cache_root)
+        self.assertLess(build, post_install_cleanup)
+
+    def test_cache_pruner_keeps_current_and_newest_other_cache(self):
+        source = POLYFILL.read_text()
+        marker = 'python3 - "$root" "$protected_name" "$keep" <<\'PY\'\n'
+        script = source.split(marker, 1)[1].split("\nPY\n}", 1)[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            names = [f"toolchain-{digit * 40}" for digit in "1234"]
+            for index, name in enumerate(names, start=1):
+                path = root / name
+                path.mkdir()
+                (path / "payload").write_bytes(b"x" * index)
+                os.utime(path, (index, index))
+            unrelated = root / "keep-me"
+            unrelated.mkdir()
+            link = root / ("toolchain-" + "a" * 40)
+            link.symlink_to(root / names[0], target_is_directory=True)
+
+            proc = subprocess.run(
+                [sys.executable, "-", str(root), names[0], "2"],
+                input=script,
+                text=True,
+                capture_output=True,
+            )
+            remaining = {path.name for path in root.iterdir()}
+
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn(names[0], remaining)  # protected even though it is oldest
+        self.assertIn(names[3], remaining)  # newest non-protected cache
+        self.assertNotIn(names[1], remaining)
+        self.assertNotIn(names[2], remaining)
+        self.assertIn("keep-me", remaining)
+        self.assertIn(link.name, remaining)
+        self.assertIn("2 retained, 2 removed", proc.stdout)
+
 
 class EmbeddedPreloadTests(unittest.TestCase):
     @staticmethod

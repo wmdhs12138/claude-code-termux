@@ -47,6 +47,77 @@ force="$2"
 check="$3"
 cache_base="$4"
 
+prune_update_cache() {
+  local root="$1"
+  local protected_name=""
+  local keep
+  if [ "$#" -ge 2 ]; then protected_name="$2"; fi
+  keep="$(printenv CLAUDE_CODE_TERMUX_CACHE_KEEP 2>/dev/null || printf 2)"
+  if ! [[ "$keep" =~ ^[0-9]+$ ]] || [ "$keep" -lt 2 ]; then
+    echo "claude update: invalid cache retention '$keep'; keeping 2" >&2
+    keep=2
+  fi
+  [ -d "$root" ] || return 0
+  python3 - "$root" "$protected_name" "$keep" <<'PY'
+import os
+from pathlib import Path
+import re
+import shutil
+import sys
+
+root = Path(sys.argv[1])
+protected_name = sys.argv[2]
+keep = int(sys.argv[3])
+pattern = re.compile(r"toolchain-[0-9a-f]{40}")
+
+entries = []
+for path in root.iterdir():
+    if not pattern.fullmatch(path.name) or path.is_symlink() or not path.is_dir():
+        continue
+    try:
+        mtime = path.stat().st_mtime_ns
+    except OSError:
+        continue
+    entries.append((path.name == protected_name, mtime, path))
+
+entries.sort(key=lambda item: (item[0], item[1]), reverse=True)
+victims = entries[keep:]
+if not victims:
+    print(f"claude update: cache cleanup: {len(entries)} retained, 0 removed")
+    raise SystemExit(0)
+
+freed = 0
+for _, _, path in victims:
+    for parent, dirs, files in os.walk(path, topdown=True, followlinks=False):
+        for name in files:
+            try:
+                freed += os.lstat(os.path.join(parent, name)).st_size
+            except OSError:
+                pass
+        for name in dirs:
+            child = os.path.join(parent, name)
+            if os.path.islink(child):
+                try:
+                    freed += os.lstat(child).st_size
+                except OSError:
+                    pass
+    shutil.rmtree(path)
+
+print(
+    f"claude update: cache cleanup: {len(entries) - len(victims)} retained, "
+    f"{len(victims)} removed ({freed / (1024 * 1024):.1f} MiB freed)"
+)
+PY
+}
+
+run_cache_cleanup() {
+  local protected_name=""
+  if [ "$#" -ge 2 ]; then protected_name="$2"; fi
+  if ! prune_update_cache "$1" "$protected_name"; then
+    echo "claude update: warning: cache cleanup failed; update remains installed" >&2
+  fi
+}
+
 latest="$(curl -fsSL --max-time 30 https://downloads.claude.ai/claude-code-releases/latest)"
 case "$latest" in
   ''|*[!0-9.]*) echo "claude update: invalid latest version '$latest'" >&2; exit 1 ;;
@@ -62,12 +133,13 @@ if [ "$check" = "1" ]; then
   fi
   exit 0
 fi
+cache_root="$cache_base/claude-code-termux/self-update"
 if [ "$force" != "1" ] && [ "$current" = "$latest" ]; then
   echo "Claude Code $current is already up to date (use --force to rebuild)"
+  run_cache_cleanup "$cache_root"
   exit 0
 fi
 
-cache_root="$cache_base/claude-code-termux/self-update"
 mkdir -p "$cache_root"
 commit="$(curl -fsSL --max-time 30 https://api.github.com/repos/wmdhs12138/claude-code-termux/commits/main \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])')"
@@ -107,6 +179,8 @@ test "$replacement_version" = "$latest"
 mv -f "$replacement" "$target"
 trap - EXIT
 echo "Claude Code updated successfully: $current -> $latest"
+touch "$source_dir"
+run_cache_cleanup "$cache_root" "$(basename "$source_dir")"
 `;
       var updateResult = Bun.spawnSync({
         cmd: [
