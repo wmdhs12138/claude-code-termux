@@ -8,11 +8,6 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="${1:-latest}"
 OUTDIR="${2:-$ROOT/work}"
 BASE="https://downloads.claude.ai/claude-code-releases"
-if [ -t 2 ]; then
-  CURL_PROGRESS=--progress-bar
-else
-  CURL_PROGRESS=--silent
-fi
 
 # Standalone fetches share the build lock because work/.claude-version and the
 # downloaded binary are consumed as one pair by build.sh.
@@ -52,7 +47,12 @@ if [ -f "$OUT" ] && [ "$(stat -c%s "$OUT")" = "$SIZE" ] \
   echo "fetch-claude: cached $OUT" >&2
 else
   echo "fetch-claude: downloading $VERSION ($SIZE bytes)..." >&2
-  curl -fL --show-error "$CURL_PROGRESS" --retry 3 -C - -o "$OUT" "$BASE/$VERSION/linux-arm64/claude"
+  if [ -t 2 ]; then
+    curl -fL --show-error --progress-bar --retry 3 -C - -o "$OUT" \
+      "$BASE/$VERSION/linux-arm64/claude" 2>&1 | python3 "$ROOT/scripts/compact-progress.py"
+  else
+    curl -fsSL --retry 3 -C - -o "$OUT" "$BASE/$VERSION/linux-arm64/claude"
+  fi
   ACTUAL="$(sha256sum "$OUT" | cut -d' ' -f1)"
   if [ "$ACTUAL" != "$CHECKSUM" ]; then
     echo "fetch-claude: checksum mismatch (got $ACTUAL)" >&2

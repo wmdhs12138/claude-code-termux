@@ -46,11 +46,6 @@ target="$1"
 force="$2"
 check="$3"
 cache_base="$4"
-if [ -t 2 ]; then
-  curl_progress=--progress-bar
-else
-  curl_progress=--silent
-fi
 
 prune_update_cache() {
   local root="$1"
@@ -187,7 +182,7 @@ if [ ! -r "$source_dir/scripts/build.sh" ]; then
   stage="$(mktemp -d "$cache_root/download.XXXXXX")"
   trap 'rm -rf "$stage"' EXIT
   echo "claude update: downloading toolchain..."
-  curl -fL --show-error "$curl_progress" --retry 3 --retry-all-errors \
+  curl -fsSL --retry 3 --retry-all-errors \
     "https://github.com/wmdhs12138/claude-code-termux/archive/$commit.tar.gz" \
     -o "$stage/toolchain.tar.gz"
   mkdir "$stage/source"

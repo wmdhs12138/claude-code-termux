@@ -24,11 +24,24 @@ INSTALL = ROOT / "install.sh"
 
 class VersionValidationTests(unittest.TestCase):
     def test_large_downloads_use_single_line_bar_only_in_terminals(self):
-        for source in (FETCH.read_text(), BUILD.read_text(), POLYFILL.read_text()):
+        for source in (FETCH.read_text(), BUILD.read_text()):
             self.assertIn('if [ -t 2 ]; then', source)
-            self.assertIn('=--progress-bar', source)
-            self.assertIn('=--silent', source)
+            self.assertIn('--progress-bar', source)
+            self.assertIn('scripts/compact-progress.py', source)
+            self.assertIn('curl -fsSL', source)
             self.assertIn('--show-error', source)
+
+    def test_compact_progress_throttles_updates_and_preserves_errors(self):
+        payload = b"0.1%\r0.9%\r4.9%\r5.0%\r5.4%\r10.0%\r100.0%\rcurl: (22) test error\n"
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "compact-progress.py")],
+            input=payload,
+            capture_output=True,
+        )
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(proc.stderr.count(b"\r["), 4)
+        self.assertIn(b"100%", proc.stderr)
+        self.assertIn(b"curl: (22) test error", proc.stderr)
 
     def test_fetch_rejects_non_semver_before_network(self):
         with tempfile.TemporaryDirectory() as tmp:

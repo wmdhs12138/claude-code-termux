@@ -9,11 +9,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="${1:-latest}"
 BUN_URL="${BUN_URL:-https://github.com/wmdhs12138/bun/releases/download/bionic-v1.4.3-canary.1-5fce36ebb/bun-linux-aarch64-android-5fce36ebb6.zip}"
-if [ -t 2 ]; then
-  CURL_PROGRESS=--progress-bar
-else
-  CURL_PROGRESS=--silent
-fi
 REFRESH_BASE="${REFRESH_BASE:-0}"
 WORK="$ROOT/work"
 DIST="$ROOT/dist"
@@ -183,7 +178,12 @@ fi
 BUN="$BUN_DIR/bun"
 if [ ! -x "$BUN" ]; then
   echo "build: fetching Android Bun base..." >&2
-  curl -fL --show-error "$CURL_PROGRESS" --retry 3 -o "$BUN_ZIP" "$BUN_URL"
+  if [ -t 2 ]; then
+    curl -fL --show-error --progress-bar --retry 3 -o "$BUN_ZIP" "$BUN_URL" \
+      2>&1 | python3 "$ROOT/scripts/compact-progress.py"
+  else
+    curl -fsSL --retry 3 -o "$BUN_ZIP" "$BUN_URL"
+  fi
   BUN_ARCHIVE_SHA="$(sha256sum "$BUN_ZIP" | cut -d' ' -f1)"
   if [ "$BUN_ARCHIVE_SHA" != "$PINNED_BUN_ARCHIVE_SHA" ] \
      && [ "$REFRESH_BASE" != "1" ]; then
