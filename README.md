@@ -129,8 +129,9 @@ claude update
 或校验失败都会保留旧 ELF。这里不会调用 Claude 官方自更新器，因为它下载的 glibc 产物会破坏
 Termux 安装。
 
-成功更新后，更新器会检查该目录中的旧 `toolchain-<commit>` 缓存，默认保留最近 2 份并删除
-更旧的缓存；当前更新使用的工具链始终优先保留。普通 `claude update` 在已经是最新版时也会执行
+成功更新后，更新器会检查该目录中的 `claude-<版本>-toolchain-<commit>` 缓存，默认保留
+最近 2 个不同 Claude 版本，每个版本保留一份；旧格式 `toolchain-<commit>` 也会通过构建清单识别。
+当前更新使用的缓存始终优先保留。普通 `claude update` 在已经是最新版时也会执行
 检查，`claude update --check` 则保持只读。可通过 `CLAUDE_CODE_TERMUX_CACHE_KEEP=N` 保留更多，
 但低于 2 或无效的值会回退为 2。清理失败只会给出警告，不会回滚已经安装成功的新版本。
 

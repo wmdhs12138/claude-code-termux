@@ -415,9 +415,10 @@ class CellSegmenterPolyfillTests(unittest.TestCase):
     def test_self_update_prunes_only_old_toolchain_caches(self):
         source = POLYFILL.read_text()
         self.assertIn('printenv CLAUDE_CODE_TERMUX_CACHE_KEEP', source)
-        self.assertIn('toolchain-[0-9a-f]{40}', source)
+        self.assertIn('legacy_pattern = re.compile(r"toolchain-[0-9a-f]{40}")', source)
+        self.assertIn('versioned_pattern = re.compile(', source)
         self.assertIn('path.is_symlink()', source)
-        self.assertIn('entries[keep:]', source)
+        self.assertIn('retained_versions.add(entry[0])', source)
         self.assertIn('run_cache_cleanup "$cache_root" "$(basename "$source_dir")"', source)
 
     def test_self_update_never_prunes_during_check_or_before_build(self):
@@ -437,10 +438,20 @@ class CellSegmenterPolyfillTests(unittest.TestCase):
         script = source.split(marker, 1)[1].split("\nPY\n}", 1)[0]
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            names = [f"toolchain-{digit * 40}" for digit in "1234"]
+            names = [
+                "toolchain-" + "1" * 40,  # legacy 2.1.272
+                "toolchain-" + "2" * 40,  # legacy 2.1.273
+                "toolchain-" + "3" * 40,  # legacy 2.1.274
+                "claude-2.1.274-toolchain-" + "4" * 40,  # newer duplicate
+                "claude-2.1.275-toolchain-" + "5" * 40,  # protected current
+            ]
             for index, name in enumerate(names, start=1):
                 path = root / name
-                path.mkdir()
+                (path / "dist").mkdir(parents=True)
+                version = f"2.1.{271 + index if index <= 3 else 274 if index == 4 else 275}"
+                (path / "dist" / "build-manifest.json").write_text(
+                    json.dumps({"claude": version})
+                )
                 (path / "payload").write_bytes(b"x" * index)
                 os.utime(path, (index, index))
             unrelated = root / "keep-me"
@@ -449,7 +460,7 @@ class CellSegmenterPolyfillTests(unittest.TestCase):
             link.symlink_to(root / names[0], target_is_directory=True)
 
             proc = subprocess.run(
-                [sys.executable, "-", str(root), names[0], "2"],
+                [sys.executable, "-", str(root), names[4], "2"],
                 input=script,
                 text=True,
                 capture_output=True,
@@ -457,13 +468,42 @@ class CellSegmenterPolyfillTests(unittest.TestCase):
             remaining = {path.name for path in root.iterdir()}
 
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertIn(names[0], remaining)  # protected even though it is oldest
-        self.assertIn(names[3], remaining)  # newest non-protected cache
+        self.assertNotIn(names[0], remaining)
         self.assertNotIn(names[1], remaining)
-        self.assertNotIn(names[2], remaining)
+        self.assertNotIn(names[2], remaining)  # duplicate 2.1.274
+        self.assertIn(names[3], remaining)
+        self.assertIn(names[4], remaining)  # protected current version
         self.assertIn("keep-me", remaining)
         self.assertIn(link.name, remaining)
-        self.assertIn("2 retained, 2 removed", proc.stdout)
+        self.assertIn("2 versions retained, 3 removed", proc.stdout)
+
+    def test_cache_pruner_retains_two_distinct_versions_despite_duplicates(self):
+        source = POLYFILL.read_text()
+        marker = 'python3 - "$root" "$protected_name" "$keep" <<\'PY\'\n'
+        script = source.split(marker, 1)[1].split("\nPY\n}", 1)[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            specs = [
+                ("claude-2.1.274-toolchain-" + "1" * 40, "2.1.274"),
+                ("claude-2.1.274-toolchain-" + "2" * 40, "2.1.274"),
+                ("claude-2.1.273-toolchain-" + "3" * 40, "2.1.273"),
+            ]
+            for index, (name, version) in enumerate(specs):
+                path = root / name / "dist"
+                path.mkdir(parents=True)
+                (path / "build-manifest.json").write_text(json.dumps({"claude": version}))
+                os.utime(path.parent, (index, index))
+            proc = subprocess.run(
+                [sys.executable, "-", str(root), "", "2"],
+                input=script,
+                text=True,
+                capture_output=True,
+            )
+            remaining = {path.name for path in root.iterdir()}
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(len(remaining), 2)
+        self.assertIn(specs[1][0], remaining)
+        self.assertIn(specs[2][0], remaining)
 
 
 class EmbeddedPreloadTests(unittest.TestCase):

@@ -61,6 +61,7 @@ prune_update_cache() {
   python3 - "$root" "$protected_name" "$keep" <<'PY'
 import os
 from pathlib import Path
+import json
 import re
 import shutil
 import sys
@@ -68,26 +69,53 @@ import sys
 root = Path(sys.argv[1])
 protected_name = sys.argv[2]
 keep = int(sys.argv[3])
-pattern = re.compile(r"toolchain-[0-9a-f]{40}")
+legacy_pattern = re.compile(r"toolchain-[0-9a-f]{40}")
+versioned_pattern = re.compile(r"claude-(\d+\.\d+\.\d+)-toolchain-[0-9a-f]{40}")
+version_pattern = re.compile(r"\d+\.\d+\.\d+")
 
 entries = []
 for path in root.iterdir():
-    if not pattern.fullmatch(path.name) or path.is_symlink() or not path.is_dir():
+    match = versioned_pattern.fullmatch(path.name)
+    if not (match or legacy_pattern.fullmatch(path.name)) or path.is_symlink() or not path.is_dir():
         continue
     try:
+        manifest = json.loads((path / "dist" / "build-manifest.json").read_text())
+        version = manifest["claude"]
+        if not isinstance(version, str) or not version_pattern.fullmatch(version):
+            continue
+        if match and match.group(1) != version:
+            continue
         mtime = path.stat().st_mtime_ns
-    except OSError:
+    except (OSError, ValueError, KeyError, TypeError):
         continue
-    entries.append((path.name == protected_name, mtime, path))
+    entries.append((tuple(map(int, version.split("."))), path.name == protected_name, mtime, path))
 
-entries.sort(key=lambda item: (item[0], item[1]), reverse=True)
-victims = entries[keep:]
+entries.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+retained_versions = set()
+for entry in entries:
+    if entry[1]:
+        retained_versions.add(entry[0])
+for entry in entries:
+    if len(retained_versions) >= keep:
+        break
+    retained_versions.add(entry[0])
+# Keep one cache for each of the newest distinct Claude versions. A forced
+# rebuild may leave both a legacy and a versioned cache for the same version;
+# prefer the cache used by this update, then the most recently modified one.
+retained = []
+victims = []
+for entry in entries:
+    version = entry[0]
+    if version in retained_versions and not any(item[0] == version for item in retained):
+        retained.append(entry)
+    else:
+        victims.append(entry)
 if not victims:
-    print(f"claude update: cache cleanup: {len(entries)} retained, 0 removed")
+    print(f"claude update: cache cleanup: {len(retained)} versions retained, 0 removed")
     raise SystemExit(0)
 
 freed = 0
-for _, _, path in victims:
+for _, _, _, path in victims:
     for parent, dirs, files in os.walk(path, topdown=True, followlinks=False):
         for name in files:
             try:
@@ -104,7 +132,7 @@ for _, _, path in victims:
     shutil.rmtree(path)
 
 print(
-    f"claude update: cache cleanup: {len(entries) - len(victims)} retained, "
+    f"claude update: cache cleanup: {len(retained)} versions retained, "
     f"{len(victims)} removed ({freed / (1024 * 1024):.1f} MiB freed)"
 )
 PY
@@ -147,7 +175,7 @@ case "$commit" in
   [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
   *) echo "claude update: invalid toolchain commit '$commit'" >&2; exit 1 ;;
 esac
-source_dir="$cache_root/toolchain-$commit"
+source_dir="$cache_root/claude-$latest-toolchain-$commit"
 if [ ! -r "$source_dir/scripts/build.sh" ]; then
   stage="$(mktemp -d "$cache_root/download.XXXXXX")"
   trap 'rm -rf "$stage"' EXIT
