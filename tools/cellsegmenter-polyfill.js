@@ -46,6 +46,11 @@ target="$1"
 force="$2"
 check="$3"
 cache_base="$4"
+if [ -t 2 ]; then
+  curl_progress=--progress-bar
+else
+  curl_progress=--silent
+fi
 
 prune_update_cache() {
   local root="$1"
@@ -176,10 +181,13 @@ case "$commit" in
   *) echo "claude update: invalid toolchain commit '$commit'" >&2; exit 1 ;;
 esac
 source_dir="$cache_root/claude-$latest-toolchain-$commit"
+echo "claude update: $current -> $latest"
+echo "claude update: toolchain $commit"
 if [ ! -r "$source_dir/scripts/build.sh" ]; then
   stage="$(mktemp -d "$cache_root/download.XXXXXX")"
   trap 'rm -rf "$stage"' EXIT
-  curl -fL --retry 3 --retry-all-errors \
+  echo "claude update: downloading toolchain..."
+  curl -fL --show-error "$curl_progress" --retry 3 --retry-all-errors \
     "https://github.com/wmdhs12138/claude-code-termux/archive/$commit.tar.gz" \
     -o "$stage/toolchain.tar.gz"
   mkdir "$stage/source"
@@ -189,8 +197,6 @@ if [ ! -r "$source_dir/scripts/build.sh" ]; then
   trap - EXIT
 fi
 
-echo "claude update: $current -> $latest"
-echo "claude update: toolchain $commit"
 (cd "$source_dir" && bash scripts/build.sh "$latest")
 candidate="$source_dir/dist/claude"
 test -x "$candidate"

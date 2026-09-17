@@ -23,6 +23,13 @@ INSTALL = ROOT / "install.sh"
 
 
 class VersionValidationTests(unittest.TestCase):
+    def test_large_downloads_use_single_line_bar_only_in_terminals(self):
+        for source in (FETCH.read_text(), BUILD.read_text(), POLYFILL.read_text()):
+            self.assertIn('if [ -t 2 ]; then', source)
+            self.assertIn('=--progress-bar', source)
+            self.assertIn('=--silent', source)
+            self.assertIn('--show-error', source)
+
     def test_fetch_rejects_non_semver_before_network(self):
         with tempfile.TemporaryDirectory() as tmp:
             proc = subprocess.run(
