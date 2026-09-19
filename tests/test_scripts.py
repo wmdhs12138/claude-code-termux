@@ -590,7 +590,7 @@ class CellSegmenterPolyfillTests(unittest.TestCase):
         self.assertIn(specs[1][0], remaining)
         self.assertIn(specs[2][0], remaining)
 
-    def test_bun_cache_pruner_keeps_current_and_one_previous_base(self):
+    def test_bun_cache_pruner_keeps_only_current_base_by_default(self):
         source = POLYFILL.read_text()
         marker = 'python3 - "$root" "$protected_name" "$keep" "$current_version" "$bun_keep" <<\'PY\'\n'
         script = source.split(marker, 1)[1].split("\nPY\n}", 1)[0]
@@ -622,7 +622,7 @@ class CellSegmenterPolyfillTests(unittest.TestCase):
             proc = subprocess.run(
                 [
                     sys.executable, "-", str(root), version_dir.name, "2",
-                    "2.1.278", "2",
+                    "2.1.278", "1",
                 ],
                 input=script,
                 text=True,
@@ -633,8 +633,8 @@ class CellSegmenterPolyfillTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn(names[0], remaining)  # protected current, despite oldest mtime
         self.assertNotIn(names[1], remaining)
-        self.assertIn(names[2], remaining)  # most recent previous base
-        self.assertIn("Bun cache cleanup: 2 retained, 1 removed", proc.stdout)
+        self.assertNotIn(names[2], remaining)
+        self.assertIn("Bun cache cleanup: 1 retained, 2 removed", proc.stdout)
 
 
 class EmbeddedPreloadTests(unittest.TestCase):

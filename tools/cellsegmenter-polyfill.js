@@ -60,10 +60,10 @@ prune_update_cache() {
     echo "claude update: invalid cache retention '$keep'; keeping 2" >&2
     keep=2
   fi
-  bun_keep="$(printenv CLAUDE_CODE_TERMUX_BUN_CACHE_KEEP 2>/dev/null || printf 2)"
-  if ! [[ "$bun_keep" =~ ^[0-9]+$ ]] || [ "$bun_keep" -lt 2 ]; then
-    echo "claude update: invalid Bun cache retention '$bun_keep'; keeping 2" >&2
-    bun_keep=2
+  bun_keep="$(printenv CLAUDE_CODE_TERMUX_BUN_CACHE_KEEP 2>/dev/null || printf 1)"
+  if ! [[ "$bun_keep" =~ ^[0-9]+$ ]] || [ "$bun_keep" -lt 1 ]; then
+    echo "claude update: invalid Bun cache retention '$bun_keep'; keeping 1" >&2
+    bun_keep=1
   fi
   [ -d "$root" ] || return 0
   python3 - "$root" "$protected_name" "$keep" "$current_version" "$bun_keep" <<'PY'
