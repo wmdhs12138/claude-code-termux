@@ -81,6 +81,12 @@ class VersionValidationTests(unittest.TestCase):
         )
         self.assertIn('scripts/ensure-bun-base.sh', BUILD.read_text())
 
+    def test_embedded_update_resolves_main_without_github_api_quota(self):
+        source = POLYFILL.read_text()
+        self.assertIn('git ls-remote https://github.com/wmdhs12138/claude-code-termux.git', source)
+        self.assertNotIn('api.github.com/repos/wmdhs12138/claude-code-termux/commits/main', source)
+        self.assertIn('commands=(bash curl git python3', INSTALL.read_text())
+
     def test_large_downloads_use_single_line_bar_only_in_terminals(self):
         for source in (FETCH.read_text(), BUILD.read_text()):
             self.assertIn('if [ -t 2 ]; then', source)
@@ -485,7 +491,7 @@ class CellSegmenterPolyfillTests(unittest.TestCase):
         source = POLYFILL.read_text()
         self.assertIn('argv[ai] === "update" || argv[ai] === "upgrade"', source)
         self.assertIn('https://downloads.claude.ai/claude-code-releases/latest', source)
-        self.assertIn('claude-code-termux/commits/main', source)
+        self.assertIn('claude-code-termux.git refs/heads/main', source)
         self.assertIn('mv -f "$replacement" "$target"', source)
         self.assertIn('updateArgs.indexOf("--check")', source)
         self.assertIn('updateArgs.indexOf("--force")', source)

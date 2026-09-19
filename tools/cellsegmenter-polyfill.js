@@ -169,12 +169,12 @@ if [ "$force" != "1" ] && [ "$current" = "$latest" ]; then
 fi
 
 mkdir -p "$cache_root"
-commit="$(curl -fsSL --max-time 30 https://api.github.com/repos/wmdhs12138/claude-code-termux/commits/main \
-  | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])')"
-case "$commit" in
-  [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
-  *) echo "claude update: invalid toolchain commit '$commit'" >&2; exit 1 ;;
-esac
+commit="$(git ls-remote https://github.com/wmdhs12138/claude-code-termux.git refs/heads/main \
+  | awk 'NR == 1 {print $1}')"
+if ! [[ "$commit" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "claude update: invalid toolchain commit '$commit'" >&2
+  exit 1
+fi
 source_dir="$cache_root/claude-$latest-toolchain-$commit"
 echo "claude update: $current -> $latest"
 echo "claude update: toolchain $commit"

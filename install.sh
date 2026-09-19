@@ -68,8 +68,8 @@ if [ "${CLAUDE_CODE_TERMUX_ALLOW_UNSUPPORTED:-0}" != "1" ]; then
 fi
 
 if [ "$BUILD" = "1" ]; then
-  commands=(bash curl python3 unzip rg flock sha256sum tar awk sed mktemp)
-  packages=(bash curl python unzip ripgrep util-linux coreutils tar gawk sed coreutils)
+  commands=(bash curl git python3 unzip rg flock sha256sum tar awk sed mktemp)
+  packages=(bash curl git python unzip ripgrep util-linux coreutils tar gawk sed coreutils)
   missing_packages=()
 
   for i in "${!commands[@]}"; do
