@@ -499,6 +499,7 @@ class CellSegmenterPolyfillTests(unittest.TestCase):
     def test_self_update_prunes_only_old_toolchain_caches(self):
         source = POLYFILL.read_text()
         self.assertIn('printenv CLAUDE_CODE_TERMUX_CACHE_KEEP', source)
+        self.assertIn('printenv CLAUDE_CODE_TERMUX_BUN_CACHE_KEEP', source)
         self.assertIn('legacy_pattern = re.compile(r"toolchain-[0-9a-f]{40}")', source)
         self.assertIn('versioned_pattern = re.compile(', source)
         self.assertIn('path.is_symlink()', source)
@@ -518,7 +519,7 @@ class CellSegmenterPolyfillTests(unittest.TestCase):
 
     def test_cache_pruner_keeps_current_and_newest_other_cache(self):
         source = POLYFILL.read_text()
-        marker = 'python3 - "$root" "$protected_name" "$keep" <<\'PY\'\n'
+        marker = 'python3 - "$root" "$protected_name" "$keep" "$current_version" "$bun_keep" <<\'PY\'\n'
         script = source.split(marker, 1)[1].split("\nPY\n}", 1)[0]
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -544,7 +545,7 @@ class CellSegmenterPolyfillTests(unittest.TestCase):
             link.symlink_to(root / names[0], target_is_directory=True)
 
             proc = subprocess.run(
-                [sys.executable, "-", str(root), names[4], "2"],
+                [sys.executable, "-", str(root), names[4], "2", "2.1.275", "2"],
                 input=script,
                 text=True,
                 capture_output=True,
@@ -563,7 +564,7 @@ class CellSegmenterPolyfillTests(unittest.TestCase):
 
     def test_cache_pruner_retains_two_distinct_versions_despite_duplicates(self):
         source = POLYFILL.read_text()
-        marker = 'python3 - "$root" "$protected_name" "$keep" <<\'PY\'\n'
+        marker = 'python3 - "$root" "$protected_name" "$keep" "$current_version" "$bun_keep" <<\'PY\'\n'
         script = source.split(marker, 1)[1].split("\nPY\n}", 1)[0]
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -578,7 +579,7 @@ class CellSegmenterPolyfillTests(unittest.TestCase):
                 (path / "build-manifest.json").write_text(json.dumps({"claude": version}))
                 os.utime(path.parent, (index, index))
             proc = subprocess.run(
-                [sys.executable, "-", str(root), "", "2"],
+                [sys.executable, "-", str(root), "", "2", "2.1.274", "2"],
                 input=script,
                 text=True,
                 capture_output=True,
@@ -588,6 +589,52 @@ class CellSegmenterPolyfillTests(unittest.TestCase):
         self.assertEqual(len(remaining), 2)
         self.assertIn(specs[1][0], remaining)
         self.assertIn(specs[2][0], remaining)
+
+    def test_bun_cache_pruner_keeps_current_and_one_previous_base(self):
+        source = POLYFILL.read_text()
+        marker = 'python3 - "$root" "$protected_name" "$keep" "$current_version" "$bun_keep" <<\'PY\'\n'
+        script = source.split(marker, 1)[1].split("\nPY\n}", 1)[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            current_payload = b"current-bun"
+            current_sha = hashlib.sha256(current_payload).hexdigest()
+            version_dir = root / ("claude-2.1.278-toolchain-" + "1" * 40)
+            (version_dir / "dist").mkdir(parents=True)
+            (version_dir / "dist" / "build-manifest.json").write_text(
+                json.dumps(
+                    {
+                        "claude": "2.1.278",
+                        "base_bun": {"binary_sha256": current_sha},
+                    }
+                )
+            )
+            bun_root = root / "bun-bases"
+            payloads = [current_payload, b"previous-bun", b"oldest-bun"]
+            names = []
+            for index, payload in enumerate(payloads, start=1):
+                digest = hashlib.sha256(payload).hexdigest()
+                path = bun_root / f"bun-{digest}"
+                path.mkdir(parents=True)
+                (path / "bun").write_bytes(payload)
+                os.utime(path, (index, index))
+                names.append(path.name)
+
+            proc = subprocess.run(
+                [
+                    sys.executable, "-", str(root), version_dir.name, "2",
+                    "2.1.278", "2",
+                ],
+                input=script,
+                text=True,
+                capture_output=True,
+            )
+            remaining = {path.name for path in bun_root.iterdir()}
+
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn(names[0], remaining)  # protected current, despite oldest mtime
+        self.assertNotIn(names[1], remaining)
+        self.assertIn(names[2], remaining)  # most recent previous base
+        self.assertIn("Bun cache cleanup: 2 retained, 1 removed", proc.stdout)
 
 
 class EmbeddedPreloadTests(unittest.TestCase):

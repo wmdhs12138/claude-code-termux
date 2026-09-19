@@ -50,17 +50,26 @@ cache_base="$4"
 prune_update_cache() {
   local root="$1"
   local protected_name=""
+  local current_version=""
   local keep
+  local bun_keep
   if [ "$#" -ge 2 ]; then protected_name="$2"; fi
+  if [ "$#" -ge 3 ]; then current_version="$3"; fi
   keep="$(printenv CLAUDE_CODE_TERMUX_CACHE_KEEP 2>/dev/null || printf 2)"
   if ! [[ "$keep" =~ ^[0-9]+$ ]] || [ "$keep" -lt 2 ]; then
     echo "claude update: invalid cache retention '$keep'; keeping 2" >&2
     keep=2
   fi
+  bun_keep="$(printenv CLAUDE_CODE_TERMUX_BUN_CACHE_KEEP 2>/dev/null || printf 2)"
+  if ! [[ "$bun_keep" =~ ^[0-9]+$ ]] || [ "$bun_keep" -lt 2 ]; then
+    echo "claude update: invalid Bun cache retention '$bun_keep'; keeping 2" >&2
+    bun_keep=2
+  fi
   [ -d "$root" ] || return 0
-  python3 - "$root" "$protected_name" "$keep" <<'PY'
+  python3 - "$root" "$protected_name" "$keep" "$current_version" "$bun_keep" <<'PY'
 import os
 from pathlib import Path
+import hashlib
 import json
 import re
 import shutil
@@ -69,6 +78,8 @@ import sys
 root = Path(sys.argv[1])
 protected_name = sys.argv[2]
 keep = int(sys.argv[3])
+current_version = sys.argv[4]
+bun_keep = int(sys.argv[5])
 legacy_pattern = re.compile(r"toolchain-[0-9a-f]{40}")
 versioned_pattern = re.compile(r"claude-(\d+\.\d+\.\d+)-toolchain-[0-9a-f]{40}")
 version_pattern = re.compile(r"\d+\.\d+\.\d+")
@@ -110,38 +121,91 @@ for entry in entries:
         retained.append(entry)
     else:
         victims.append(entry)
-if not victims:
-    print(f"claude update: cache cleanup: {len(retained)} versions retained, 0 removed")
-    raise SystemExit(0)
-
-freed = 0
-for _, _, _, path in victims:
+def path_size(path):
+    size = 0
     for parent, dirs, files in os.walk(path, topdown=True, followlinks=False):
         for name in files:
             try:
-                freed += os.lstat(os.path.join(parent, name)).st_size
+                size += os.lstat(os.path.join(parent, name)).st_size
             except OSError:
                 pass
         for name in dirs:
             child = os.path.join(parent, name)
             if os.path.islink(child):
                 try:
-                    freed += os.lstat(child).st_size
+                    size += os.lstat(child).st_size
                 except OSError:
                     pass
+    return size
+
+freed = 0
+for _, _, _, path in victims:
+    freed += path_size(path)
     shutil.rmtree(path)
 
 print(
     f"claude update: cache cleanup: {len(retained)} versions retained, "
     f"{len(victims)} removed ({freed / (1024 * 1024):.1f} MiB freed)"
 )
+
+# Bun bases have a separate retention boundary. Resolve the protected hash
+# from the manifest of the successfully installed/current Claude version; if
+# that evidence is unavailable or the protected base is corrupt, delete none.
+current_bun_sha = None
+for version, _, _, path in retained:
+    if ".".join(map(str, version)) != current_version:
+        continue
+    try:
+        candidate = json.loads((path / "dist" / "build-manifest.json").read_text())["base_bun"]["binary_sha256"]
+    except (OSError, ValueError, KeyError, TypeError):
+        continue
+    if isinstance(candidate, str) and re.fullmatch(r"[0-9a-f]{64}", candidate):
+        current_bun_sha = candidate
+        break
+
+bun_root = root / "bun-bases"
+if current_bun_sha and bun_root.is_dir() and not bun_root.is_symlink():
+    bun_entries = []
+    for path in bun_root.iterdir():
+        match = re.fullmatch(r"bun-([0-9a-f]{64})", path.name)
+        if not match or path.is_symlink() or not path.is_dir():
+            continue
+        try:
+            bun_entries.append((match.group(1) == current_bun_sha, path.stat().st_mtime_ns, path))
+        except OSError:
+            continue
+    protected = bun_root / f"bun-{current_bun_sha}" / "bun"
+    protected_ok = False
+    try:
+        digest = hashlib.sha256()
+        with protected.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        protected_ok = digest.hexdigest() == current_bun_sha
+    except OSError:
+        pass
+    if protected_ok:
+        bun_entries.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        bun_victims = bun_entries[bun_keep:]
+        bun_freed = 0
+        for _, _, path in bun_victims:
+            bun_freed += path_size(path)
+            shutil.rmtree(path)
+        print(
+            f"claude update: Bun cache cleanup: {len(bun_entries) - len(bun_victims)} retained, "
+            f"{len(bun_victims)} removed ({bun_freed / (1024 * 1024):.1f} MiB freed)"
+        )
+    else:
+        print("claude update: warning: protected Bun cache is missing or corrupt; no Bun cache removed", file=sys.stderr)
 PY
 }
 
 run_cache_cleanup() {
   local protected_name=""
+  local current_version=""
   if [ "$#" -ge 2 ]; then protected_name="$2"; fi
-  if ! prune_update_cache "$1" "$protected_name"; then
+  if [ "$#" -ge 3 ]; then current_version="$3"; fi
+  if ! prune_update_cache "$1" "$protected_name" "$current_version"; then
     echo "claude update: warning: cache cleanup failed; update remains installed" >&2
   fi
 }
@@ -164,7 +228,7 @@ fi
 cache_root="$cache_base/claude-code-termux/self-update"
 if [ "$force" != "1" ] && [ "$current" = "$latest" ]; then
   echo "Claude Code $current is already up to date (use --force to rebuild)"
-  run_cache_cleanup "$cache_root"
+  run_cache_cleanup "$cache_root" "" "$current"
   exit 0
 fi
 
@@ -211,7 +275,7 @@ mv -f "$replacement" "$target"
 trap - EXIT
 echo "Claude Code updated successfully: $current -> $latest"
 touch "$source_dir"
-run_cache_cleanup "$cache_root" "$(basename "$source_dir")"
+run_cache_cleanup "$cache_root" "$(basename "$source_dir")" "$latest"
 `;
       var updateResult = Bun.spawnSync({
         cmd: [

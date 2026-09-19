@@ -140,6 +140,8 @@ Termux 安装。
 Bionic Bun 底座单独保存在 `self-update/bun-bases/bun-<sha256>`，由二进制哈希寻址并在
 每次构建前重新校验。不同 Claude 版本共享这一份只读底座；首次采用共享缓存时会优先迁移
 旧版本目录中哈希匹配的 Bun。只有固定 Bun 哈希变化或共享文件损坏时才重新下载。
+成功安装 Claude 后会保留当前 Bun 和最近一个旧 Bun，删除更早的底座；失败时不清理。
+`CLAUDE_CODE_TERMUX_BUN_CACHE_KEEP=N` 可以提高保留数量，但不能低于 2。
 
 ## 内置兼容层
 
