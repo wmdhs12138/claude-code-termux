@@ -175,7 +175,14 @@ if [ "$VER" = "$PINNED_CLAUDE_VER" ] && [ -n "$PINNED_CLAUDE_SHA" ] \
 fi
 
 # 2. Android Bun base (bionic ELF)
-BUN="$BUN_DIR/bun"
+SHARED_BUN_CACHE="${CLAUDE_CODE_TERMUX_SHARED_BUN_CACHE:-}"
+if [ -n "$SHARED_BUN_CACHE" ] && [ "$REFRESH_BASE" = "0" ]; then
+  BUN="$(bash "$ROOT/scripts/ensure-bun-base.sh" \
+    "$SHARED_BUN_CACHE" "$BUN_URL" "$PINNED_BUN_ARCHIVE_SHA" "$PINNED_BUN_SHA" \
+    "$ROOT/scripts/compact-progress.py")"
+else
+  BUN="$BUN_DIR/bun"
+fi
 if [ ! -x "$BUN" ]; then
   echo "build: fetching Android Bun base..." >&2
   if [ -t 2 ]; then

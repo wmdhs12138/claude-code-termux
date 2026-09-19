@@ -192,7 +192,9 @@ if [ ! -r "$source_dir/scripts/build.sh" ]; then
   trap - EXIT
 fi
 
-(cd "$source_dir" && bash scripts/build.sh "$latest")
+(cd "$source_dir" && \
+  CLAUDE_CODE_TERMUX_SHARED_BUN_CACHE="$cache_root/bun-bases" \
+  bash scripts/build.sh "$latest")
 candidate="$source_dir/dist/claude"
 test -x "$candidate"
 candidate_version="$($candidate --version | awk '{print $1}')"

@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SMOKE = ROOT / "tools" / "tui_smoke.py"
@@ -20,9 +21,66 @@ LAUNCHER = ROOT / "scripts" / "launcher.sh"
 POLYFILL = ROOT / "tools" / "cellsegmenter-polyfill.js"
 EMBED_PRELOAD = ROOT / "tools" / "embed_preload.py"
 INSTALL = ROOT / "install.sh"
+ENSURE_BUN = ROOT / "scripts" / "ensure-bun-base.sh"
 
 
 class VersionValidationTests(unittest.TestCase):
+    def test_shared_bun_cache_downloads_once_per_binary_hash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive = root / "bun.zip"
+            payload = b"immutable-bionic-bun"
+            with zipfile.ZipFile(archive, "w") as bundle:
+                bundle.writestr("bun-linux-aarch64/bun", payload)
+            archive_sha = hashlib.sha256(archive.read_bytes()).hexdigest()
+            binary_sha = hashlib.sha256(payload).hexdigest()
+            cache = root / "cache" / "bun-bases"
+            args = [
+                "bash", str(ENSURE_BUN), str(cache), archive.as_uri(),
+                archive_sha, binary_sha, str(ROOT / "scripts" / "compact-progress.py"),
+            ]
+            first = subprocess.run(args, text=True, capture_output=True)
+            archive.unlink()
+            second = subprocess.run(args, text=True, capture_output=True)
+            target = cache / f"bun-{binary_sha}" / "bun"
+
+            self.assertEqual(first.returncode, 0, first.stderr)
+            self.assertEqual(second.returncode, 0, second.stderr)
+            self.assertEqual(target.read_bytes(), payload)
+            self.assertIn("download verified", first.stderr)
+            self.assertIn("(cached)", second.stderr)
+
+    def test_shared_bun_cache_migrates_matching_legacy_base_without_network(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            payload = b"legacy-verified-bionic-bun"
+            binary_sha = hashlib.sha256(payload).hexdigest()
+            seed = root / "claude-2.1.278-toolchain-" / "work" / "bun-android" / "bun"
+            seed.parent.mkdir(parents=True)
+            seed.write_bytes(payload)
+            seed.chmod(0o755)
+            cache = root / "bun-bases"
+            proc = subprocess.run(
+                [
+                    "bash", str(ENSURE_BUN), str(cache), "https://invalid.invalid/bun.zip",
+                    "a" * 64, binary_sha, str(ROOT / "scripts" / "compact-progress.py"),
+                ],
+                text=True,
+                capture_output=True,
+            )
+            target = cache / f"bun-{binary_sha}" / "bun"
+
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(target.read_bytes(), payload)
+            self.assertIn("(migrated)", proc.stderr)
+
+    def test_embedded_update_enables_shared_bun_cache(self):
+        source = POLYFILL.read_text()
+        self.assertIn(
+            'CLAUDE_CODE_TERMUX_SHARED_BUN_CACHE="$cache_root/bun-bases"', source
+        )
+        self.assertIn('scripts/ensure-bun-base.sh', BUILD.read_text())
+
     def test_large_downloads_use_single_line_bar_only_in_terminals(self):
         for source in (FETCH.read_text(), BUILD.read_text()):
             self.assertIn('if [ -t 2 ]; then', source)
@@ -445,7 +503,7 @@ class CellSegmenterPolyfillTests(unittest.TestCase):
         source = POLYFILL.read_text()
         check_exit = source.index('if [ "$check" = "1" ]')
         cache_root = source.index('cache_root="$cache_base/claude-code-termux/self-update"')
-        build = source.index('(cd "$source_dir" && bash scripts/build.sh "$latest")')
+        build = source.index('bash scripts/build.sh "$latest")')
         post_install_cleanup = source.index(
             'run_cache_cleanup "$cache_root" "$(basename "$source_dir")"'
         )
