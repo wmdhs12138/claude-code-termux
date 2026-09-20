@@ -1,29 +1,29 @@
 {
-  "claude": "2.1.272",
-  "claude_linux_arm64_sha256": "214a90efdd16ee0ea81132ffecced588dba394d178cc494f285ba04b5288c8de",
-  "output_version": "2.1.272 (Claude Code)",
-  "output_sha256": "ed7932c9aaa8d4128668351ce30a3a4bfc7ea3a084911b8c8b8160b95094882f",
-  "output_size": 227809036,
-  "graph_sha256": "c2a2f74bcf6c845e016c33294af38fb08dd29f56b8e916c7a74b33c372901ef1",
+  "claude": "2.1.278",
+  "claude_linux_arm64_sha256": "7de6cab134e48321148e30182c98614118e8f4666819412bead45865190b34ed",
+  "output_version": "2.1.278 (Claude Code)",
+  "output_sha256": "05e6dc9bef6dac0ff4e5ce2c8d5c1987a88f2dcce610ec5efa657ac3b9f8cd4b",
+  "output_size": 234817710,
+  "graph_sha256": "8cdcdc0e52b4029c8cd1ac0f30063a93690e6fc55e0618ab7104abd2cc76dd36",
   "adaptations": [
     "search_shadow",
     "embedded_cellsegmenter"
   ],
   "embedded_preload": {
     "preload": "cellsegmenter-polyfill.js",
-    "preload_bytes": 16863,
+    "preload_bytes": 23018,
     "entry_point": 5,
-    "entry_source_offset": 98916827,
-    "entry_source_bytes_before": 20511,
-    "entry_source_bytes_after": 37374,
-    "graph_bytes_before": 138745117,
-    "graph_bytes_after": 138761980,
+    "entry_source_offset": 103480027,
+    "entry_source_bytes_before": 20690,
+    "entry_source_bytes_after": 43708,
+    "graph_bytes_before": 145747636,
+    "graph_bytes_after": 145770654,
     "runtime_external_preload_required": false
   },
   "graft": {
     "payload_vaddr": 89047040,
-    "payload_size": 138761980,
-    "modules": 1913,
+    "payload_size": 145770654,
+    "modules": 2122,
     "entry_point": 5,
     "flags": "0x1fff",
     "trailer_ok": true
@@ -31,7 +31,7 @@
   "native_abi": {
     "required": true,
     "modules": [
-      "/$bunfs/root/chunk-tqgvd2cg.js"
+      "/$bunfs/root/chunk-8tann1aa.js"
     ],
     "bun_ant_members": [
       "CellSegmenter",
@@ -63,5 +63,5 @@
     "archive_sha256": "ff731aeadd66f3d35b6331c08c29685284e9b08f508f5d1d44305290939a8db0",
     "binary_sha256": "7e8b9686dcb86aea55ba06dd4aa46800189933d3ffe9d22f4209003f82f9ff74"
   },
-  "built_at": "2026-09-15T17:24:31+00:00"
+  "built_at": "2026-09-19T13:20:02+00:00"
 }

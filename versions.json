@@ -1,6 +1,6 @@
 {
-  "claude": "2.1.272",
-  "claude_linux_arm64_sha256": "214a90efdd16ee0ea81132ffecced588dba394d178cc494f285ba04b5288c8de",
+  "claude": "2.1.278",
+  "claude_linux_arm64_sha256": "7de6cab134e48321148e30182c98614118e8f4666819412bead45865190b34ed",
   "base_bun": {
     "version": "1.4.3-canary.1+5fce36ebb",
     "url": "https://github.com/wmdhs12138/bun/releases/download/bionic-v1.4.3-canary.1-5fce36ebb/bun-linux-aarch64-android-5fce36ebb6.zip",
@@ -10,14 +10,14 @@
   },
   "verified_output": {
     "file": "dist/claude",
-    "sha256": "ed7932c9aaa8d4128668351ce30a3a4bfc7ea3a084911b8c8b8160b95094882f",
-    "size": 227809036,
-    "graph_sha256": "c2a2f74bcf6c845e016c33294af38fb08dd29f56b8e916c7a74b33c372901ef1",
+    "sha256": "05e6dc9bef6dac0ff4e5ce2c8d5c1987a88f2dcce610ec5efa657ac3b9f8cd4b",
+    "size": 234817710,
+    "graph_sha256": "8cdcdc0e52b4029c8cd1ac0f30063a93690e6fc55e0618ab7104abd2cc76dd36",
     "adaptations": [
       "search_shadow",
       "embedded_cellsegmenter"
     ],
     "device": "Android 16 / aarch64",
-    "verified_on": "2026-09-15"
+    "verified_on": "2026-09-19"
   }
 }
