@@ -11,20 +11,21 @@
 > self-built Bionic AArch64 Bun runtime. The result is one directly executable,
 > self-updating ELF.
 
-[![Claude Code](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fwmdhs12138%2Fclaude-code-termux%2Fmain%2Fversions.json&query=%24.claude&label=Claude%20Code&color=blue)](https://github.com/wmdhs12138/claude-code-termux/releases)
+[![Claude Code](https://img.shields.io/github/v/release/wmdhs12138/claude-code-termux?display_name=tag&filter=v*&sort=semver&label=Claude%20Code&color=blue)](https://github.com/wmdhs12138/claude-code-termux/releases/latest)
 [![toolchain](https://github.com/wmdhs12138/claude-code-termux/actions/workflows/build.yml/badge.svg)](https://github.com/wmdhs12138/claude-code-termux/actions/workflows/build.yml)
 [![Bun Bionic](https://github.com/wmdhs12138/bun/actions/workflows/bionic-aarch64.yml/badge.svg)](https://github.com/wmdhs12138/bun/actions/workflows/bionic-aarch64.yml)
 
 ## 当前状态
 
-- Claude Code：`2.1.272`
+- Claude Code：跟随官方最新版（当前可用版本见上方徽章或 [Latest Release](https://github.com/wmdhs12138/claude-code-termux/releases/latest)）
 - Bun 底座：`1.4.3-canary.1+5fce36ebb`
 - 目标平台：Android 9+（API 28+）/ AArch64 / Bionic
 - 实机验证：Android 16 / AArch64
 - 已验证功能：登录与对话、TUI、Bash、Read、Grep、系统 `find`/`grep`、`/exit`
 - 已验证更新：`claude update --check` 与完整 `claude update --force`
 
-版本、输入哈希和实机产物哈希统一记录在 [`versions.json`](versions.json)。
+最后一次 Android 实机验证的版本、输入哈希和产物哈希记录在
+[`versions.json`](versions.json)。它是可复核的验证快照，不用于显示实时最新版。
 
 ## 它是怎么工作的
 
@@ -81,7 +82,7 @@ claude
 可以指定 Claude 版本：
 
 ```bash
-./install.sh 2.1.272
+./install.sh <版本号>
 ```
 
 默认目标目录可用 `CLAUDE_CODE_TERMUX_INSTALL_DIR` 修改；设置
