@@ -813,7 +813,7 @@ class ReleaseNotesTests(unittest.TestCase):
         cls.module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.module)
 
-    def test_uses_manifest_source_hash_and_pinned_repro_command(self):
+    def test_uses_manifest_source_hash_and_short_build_command(self):
         manifest = {
             "claude": "9.8.7",
             "claude_linux_arm64_sha256": "new-source-hash",
@@ -828,6 +828,8 @@ class ReleaseNotesTests(unittest.TestCase):
         self.assertIn("new-source-hash", notes)
         self.assertNotIn("stale-source-hash", notes)
         self.assertIn("make build VERSION=9.8.7", notes)
+        self.assertIn("build-manifest.json", notes)
+        self.assertNotIn("Graft 结构自检", notes)
 
     def test_reports_bionic_execution_without_waiting_for_device_snapshot(self):
         manifest = {
@@ -844,9 +846,18 @@ class ReleaseNotesTests(unittest.TestCase):
             },
         }
         notes = self.module.claude_notes(manifest, {}, "toolchain-test")
-        self.assertIn("ARM64 runner + 固定 termux-docker", notes)
-        self.assertIn("常规 Claude 版本更新不再等待维护者手机手工放行", notes)
-        self.assertNotIn("只有结构校验数据", notes)
+        self.assertIn("Bionic AArch64 直接运行、版本探针和 PTY/TUI 渲染通过", notes)
+        self.assertNotIn("仅完成结构校验", notes)
+
+    def test_toolchain_notes_focus_on_changes(self):
+        notes = self.module.toolchain_notes(
+            "toolchain-v23-abcdef0", "abcdef0", "toolchain-v22-1234567",
+            "abc1234 refine release notes", {"base_bun": {"version": "1.4.3"}},
+        )
+        self.assertIn("abc1234 refine release notes", notes)
+        self.assertIn("Bun `1.4.3`", notes)
+        self.assertNotIn("已发布过 release 的 Claude 版本", notes)
+        self.assertLess(len(notes), 400)
 
 
 class BionicCIWiringTests(unittest.TestCase):

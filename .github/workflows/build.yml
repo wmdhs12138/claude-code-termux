@@ -203,21 +203,9 @@ jobs:
             else
               git log --oneline --no-decorate -20 -- $TC_PATHS > changelog.txt
             fi
-            RELEASED="$(git tag -l 'v*' \
-                        | sed -E -n 's|^v([0-9][0-9.]*)(-r[0-9]+)?$|\1|p' \
-                        | sort -uV | paste -sd, -)"
-
-            # This tag is cut before the Claude release of the same run (that note
-            # needs it), and `gh release create` publishes its tag through the API,
-            # so this checkout never learns about it: without --pending the list
-            # below would be missing the version released seconds later.
-            PENDING=""
-            if [ "$UNRELEASED" = "true" ]; then PENDING="$VERSION"; fi
-
             python3 .github/release_notes.py toolchain tc-notes.md \
               --toolchain "$TC_TAG" --fingerprint "$TC_FP" \
-              --predecessor "$PREV" --changelog changelog.txt --released "$RELEASED" \
-              --pending "$PENDING" --paths "$TC_PATHS" \
+              --predecessor "$PREV" --changelog changelog.txt \
               --versions versions.json
 
             # --latest=false: a toolchain tag is not a newer version of the thing
