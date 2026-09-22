@@ -88,15 +88,17 @@ fi
 echo "building $LATEST (downloads ~250 MB, takes a few minutes)..."
 SKIP_RUN="${SKIP_RUN:-0}" bash "$ROOT/scripts/build.sh" "$LATEST"
 
-# refresh the installed launcher in case the template changed
-mkdir -p "$HOME/bin"
+# Refresh the installed launcher in case the template changed. This legacy
+# path now follows the same Termux-native default as install.sh.
+INSTALL_DIR="${CLAUDE_CODE_TERMUX_INSTALL_DIR:-${PREFIX:-$HOME}/bin}"
+mkdir -p "$INSTALL_DIR"
 # Escape the path before putting it through sed: an '&' or '|' in it would
 # otherwise silently produce a launcher pointing somewhere else.
 ROOT_ESC="$(printf '%s' "$ROOT" | sed 's/[&|\\]/\\&/g')"
-TMP="$HOME/bin/.claude.new.$$"
+TMP="$INSTALL_DIR/.claude.new.$$"
 sed "s|@ROOT@|$ROOT_ESC|g" "$ROOT/scripts/launcher.sh" > "$TMP"
 chmod +x "$TMP"
-mv -f "$TMP" "$HOME/bin/claude"
+mv -f "$TMP" "$INSTALL_DIR/claude"
 
 if ! FINAL_VERSION="$(probe_binary "$BIN" 2>/dev/null)"; then
   echo "claude update: rebuilt binary failed its version probe" >&2

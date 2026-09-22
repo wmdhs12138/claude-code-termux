@@ -30,7 +30,7 @@ install:
 	bash install.sh --no-build
 
 uninstall:
-	rm -f "$(HOME)/bin/claude"
+	install_dir="$${CLAUDE_CODE_TERMUX_INSTALL_DIR:-$${PREFIX:-$$HOME}/bin}"; rm -f "$$install_dir/claude"
 
 clean:
 	flock -n .build.lock -c 'rm -f work/claude-graph.bin dist/claude'

@@ -17,7 +17,7 @@ Options:
   -h, --help   Show this help
 
 Environment:
-  CLAUDE_CODE_TERMUX_INSTALL_DIR       destination directory (default: ~/bin)
+  CLAUDE_CODE_TERMUX_INSTALL_DIR       destination directory (default: $PREFIX/bin)
   CLAUDE_CODE_TERMUX_SKIP_DEPS=1       do not install missing Termux packages
   CLAUDE_CODE_TERMUX_ALLOW_UNSUPPORTED=1
                                        bypass Termux/AArch64/API checks
@@ -120,7 +120,7 @@ if [[ ! "$candidate_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   exit 1
 fi
 
-INSTALL_DIR="${CLAUDE_CODE_TERMUX_INSTALL_DIR:-$HOME/bin}"
+INSTALL_DIR="${CLAUDE_CODE_TERMUX_INSTALL_DIR:-${PREFIX:-$HOME}/bin}"
 TARGET="$INSTALL_DIR/claude"
 mkdir -p "$INSTALL_DIR"
 

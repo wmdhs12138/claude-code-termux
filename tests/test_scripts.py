@@ -403,6 +403,7 @@ class UpdateRecoveryTests(unittest.TestCase):
                     "HOME": str(home),
                     "CLAUDE_CODE_TERMUX_ROOT": str(root),
                     "CLAUDE_CODE_TERMUX_BIN": str(current),
+                    "CLAUDE_CODE_TERMUX_INSTALL_DIR": str(home / "bin"),
                     "CLAUDE_CODE_TERMUX_PROBE_TIMEOUT": "0.25",
                 }
             )
@@ -419,6 +420,14 @@ class UpdateRecoveryTests(unittest.TestCase):
 
 
 class InstallerTests(unittest.TestCase):
+    def test_defaults_to_termux_prefix_bin(self):
+        source = INSTALL.read_text()
+        self.assertIn(
+            'INSTALL_DIR="${CLAUDE_CODE_TERMUX_INSTALL_DIR:-${PREFIX:-$HOME}/bin}"',
+            source,
+        )
+        self.assertNotIn('default: ~/bin', source)
+
     def test_installs_direct_elf_atomically_and_backs_up_old_target(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "project"
