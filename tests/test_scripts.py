@@ -507,139 +507,82 @@ class CellSegmenterPolyfillTests(unittest.TestCase):
         self.assertIn('updateArgs.indexOf("--check")', source)
         self.assertIn('updateArgs.indexOf("--force")', source)
 
-    def test_self_update_prunes_only_old_toolchain_caches(self):
+    def test_self_update_uses_termux_tmp_and_only_persists_bun(self):
         source = POLYFILL.read_text()
-        self.assertIn('printenv CLAUDE_CODE_TERMUX_CACHE_KEEP', source)
-        self.assertIn('printenv CLAUDE_CODE_TERMUX_BUN_CACHE_KEEP', source)
-        self.assertIn('legacy_pattern = re.compile(r"toolchain-[0-9a-f]{40}")', source)
-        self.assertIn('versioned_pattern = re.compile(', source)
-        self.assertIn('path.is_symlink()', source)
-        self.assertIn('retained_versions.add(entry[0])', source)
-        self.assertIn('run_cache_cleanup "$cache_root" "$(basename "$source_dir")"', source)
+        self.assertIn('printenv TMPDIR', source)
+        self.assertIn('$tmp_root/claude-code-termux-update.XXXXXX', source)
+        self.assertIn('CLAUDE_CODE_TERMUX_SHARED_BUN_CACHE="$cache_root/bun-bases"', source)
+        self.assertIn('$cache_root/active-bun-sha256', source)
+        self.assertIn('trap cleanup_update EXIT', source)
+        self.assertNotIn('CLAUDE_CODE_TERMUX_CACHE_KEEP', source)
+        self.assertNotIn('source_dir="$cache_root/claude-', source)
 
-    def test_self_update_never_prunes_during_check_or_before_build(self):
+    def test_self_update_check_is_read_only(self):
         source = POLYFILL.read_text()
         check_exit = source.index('if [ "$check" = "1" ]')
         cache_root = source.index('cache_root="$cache_base/claude-code-termux/self-update"')
-        build = source.index('bash scripts/build.sh "$latest")')
-        post_install_cleanup = source.index(
-            'run_cache_cleanup "$cache_root" "$(basename "$source_dir")"'
-        )
+        tmp_dir = source.index('stage="$(mktemp -d "$tmp_root/')
         self.assertLess(check_exit, cache_root)
-        self.assertLess(build, post_install_cleanup)
+        self.assertLess(cache_root, tmp_dir)
 
-    def test_cache_pruner_keeps_current_and_newest_other_cache(self):
+    def test_legacy_claude_cache_cleanup_preserves_unrelated_paths(self):
         source = POLYFILL.read_text()
-        marker = 'python3 - "$root" "$protected_name" "$keep" "$current_version" "$bun_keep" <<\'PY\'\n'
+        marker = 'python3 - "$root" <<\'PY\'\n'
         script = source.split(marker, 1)[1].split("\nPY\n}", 1)[0]
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            names = [
-                "toolchain-" + "1" * 40,  # legacy 2.1.272
-                "toolchain-" + "2" * 40,  # legacy 2.1.273
-                "toolchain-" + "3" * 40,  # legacy 2.1.274
-                "claude-2.1.274-toolchain-" + "4" * 40,  # newer duplicate
-                "claude-2.1.275-toolchain-" + "5" * 40,  # protected current
+            victims = [
+                "toolchain-" + "1" * 40,
+                "claude-2.1.278-toolchain-" + "2" * 40,
+                "download.abcd",
+                "update.efgh",
             ]
-            for index, name in enumerate(names, start=1):
+            for name in victims:
                 path = root / name
-                (path / "dist").mkdir(parents=True)
-                version = f"2.1.{271 + index if index <= 3 else 274 if index == 4 else 275}"
-                (path / "dist" / "build-manifest.json").write_text(
-                    json.dumps({"claude": version})
-                )
-                (path / "payload").write_bytes(b"x" * index)
-                os.utime(path, (index, index))
+                path.mkdir()
+                (path / "payload").write_bytes(b"x")
             unrelated = root / "keep-me"
             unrelated.mkdir()
             link = root / ("toolchain-" + "a" * 40)
-            link.symlink_to(root / names[0], target_is_directory=True)
+            link.symlink_to(root / victims[0], target_is_directory=True)
 
             proc = subprocess.run(
-                [sys.executable, "-", str(root), names[4], "2", "2.1.275", "2"],
-                input=script,
-                text=True,
-                capture_output=True,
+                [sys.executable, "-", str(root)], input=script, text=True, capture_output=True
             )
             remaining = {path.name for path in root.iterdir()}
 
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertNotIn(names[0], remaining)
-        self.assertNotIn(names[1], remaining)
-        self.assertNotIn(names[2], remaining)  # duplicate 2.1.274
-        self.assertIn(names[3], remaining)
-        self.assertIn(names[4], remaining)  # protected current version
+        self.assertTrue(set(victims).isdisjoint(remaining))
         self.assertIn("keep-me", remaining)
         self.assertIn(link.name, remaining)
-        self.assertIn("2 versions retained, 3 removed", proc.stdout)
-
-    def test_cache_pruner_retains_two_distinct_versions_despite_duplicates(self):
-        source = POLYFILL.read_text()
-        marker = 'python3 - "$root" "$protected_name" "$keep" "$current_version" "$bun_keep" <<\'PY\'\n'
-        script = source.split(marker, 1)[1].split("\nPY\n}", 1)[0]
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            specs = [
-                ("claude-2.1.274-toolchain-" + "1" * 40, "2.1.274"),
-                ("claude-2.1.274-toolchain-" + "2" * 40, "2.1.274"),
-                ("claude-2.1.273-toolchain-" + "3" * 40, "2.1.273"),
-            ]
-            for index, (name, version) in enumerate(specs):
-                path = root / name / "dist"
-                path.mkdir(parents=True)
-                (path / "build-manifest.json").write_text(json.dumps({"claude": version}))
-                os.utime(path.parent, (index, index))
-            proc = subprocess.run(
-                [sys.executable, "-", str(root), "", "2", "2.1.274", "2"],
-                input=script,
-                text=True,
-                capture_output=True,
-            )
-            remaining = {path.name for path in root.iterdir()}
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertEqual(len(remaining), 2)
-        self.assertIn(specs[1][0], remaining)
-        self.assertIn(specs[2][0], remaining)
+        self.assertIn("4 removed", proc.stdout)
 
     def test_bun_cache_pruner_keeps_only_current_base_by_default(self):
         source = POLYFILL.read_text()
-        marker = 'python3 - "$root" "$protected_name" "$keep" "$current_version" "$bun_keep" <<\'PY\'\n'
+        marker = 'python3 - "$root/bun-bases" "$protected_sha" "$bun_keep" <<\'PY\'\n'
         script = source.split(marker, 1)[1].split("\nPY\n}", 1)[0]
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp) / "bun-bases"
+            root.mkdir()
             current_payload = b"current-bun"
             current_sha = hashlib.sha256(current_payload).hexdigest()
-            version_dir = root / ("claude-2.1.278-toolchain-" + "1" * 40)
-            (version_dir / "dist").mkdir(parents=True)
-            (version_dir / "dist" / "build-manifest.json").write_text(
-                json.dumps(
-                    {
-                        "claude": "2.1.278",
-                        "base_bun": {"binary_sha256": current_sha},
-                    }
-                )
-            )
-            bun_root = root / "bun-bases"
             payloads = [current_payload, b"previous-bun", b"oldest-bun"]
             names = []
             for index, payload in enumerate(payloads, start=1):
                 digest = hashlib.sha256(payload).hexdigest()
-                path = bun_root / f"bun-{digest}"
+                path = root / f"bun-{digest}"
                 path.mkdir(parents=True)
                 (path / "bun").write_bytes(payload)
                 os.utime(path, (index, index))
                 names.append(path.name)
 
             proc = subprocess.run(
-                [
-                    sys.executable, "-", str(root), version_dir.name, "2",
-                    "2.1.278", "1",
-                ],
+                [sys.executable, "-", str(root), current_sha, "1"],
                 input=script,
                 text=True,
                 capture_output=True,
             )
-            remaining = {path.name for path in bun_root.iterdir()}
+            remaining = {path.name for path in root.iterdir()}
 
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn(names[0], remaining)  # protected current, despite oldest mtime

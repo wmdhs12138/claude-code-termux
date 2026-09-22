@@ -39,12 +39,13 @@ claude update --force   # 强制用最新工具链重新构建
 ```
 
 这里不会调用 Claude 官方更新器，因为它会下载不能在 Termux 运行的 glibc 产物。内置更新器会获取
-本项目当前工具链，校验官方 Claude 与固定 Bionic Bun，在缓存目录构建候选，完成版本和 TUI 检查后
+本项目当前工具链，校验官方 Claude 与固定 Bionic Bun，在 Termux 临时目录构建候选，完成版本和 TUI 检查后
 才原子替换当前命令。下载、构建或验证失败时，原有 `claude` 保持不变。
 
-缓存位于 `${XDG_CACHE_HOME:-$HOME/.cache}/claude-code-termux/self-update`。默认保留最近两个
-Claude 版本，并让不同版本共享一份按 SHA-256 寻址的 Bun 底座；只有 Bun 哈希变化时才重新下载。
-可用 `CLAUDE_CODE_TERMUX_CACHE_KEEP=N` 和 `CLAUDE_CODE_TERMUX_BUN_CACHE_KEEP=N` 提高保留数量。
+官方目前只发布完整 standalone，没有跨版本差分包；HTTP Range 只能续传中断的单次下载。因此旧
+Claude 包不会加速下一版本更新。官方 Claude、工具链源码和构建中间产物都放在 `$TMPDIR`，更新
+成功或失败后立即删除；缓存目录只保留一份按 SHA-256 寻址的干净 Bun 底座，只有 Bun 哈希变化时
+才重新下载。可用 `CLAUDE_CODE_TERMUX_BUN_CACHE_KEEP=N` 提高 Bun 底座保留数量。
 
 ## 实现
 
