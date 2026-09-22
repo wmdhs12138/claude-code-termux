@@ -202,9 +202,15 @@ BUN_URL=<candidate-url> make refresh-base
 
 ## CI、Action 与发布
 
-本仓库的 CI 每日检查最新版 Claude，运行回归测试，并在 x64 runner 上完成模块图和 graft 结构
-校验。由于 runner 不能执行 AArch64/Bionic 文件，它只发布小型文本凭证和工具链 tag，**不发布
-Claude 二进制**。
+本仓库的 CI 每日检查最新版 Claude。发现新版本后，会在原生 ARM64 runner 上启动固定 digest 的
+[`termux/termux-docker`](https://github.com/termux/termux-docker) 镜像，在真实 Bionic 用户态中完成
+构建、直接执行版本探针，并通过 PTY 渲染和识别 Claude TUI。只有全部验收通过才会创建 release，
+因此常规 Claude 模块图更新不再依赖维护者手机手工放行。
+
+termux-docker 不是完整 Android 设备，不覆盖 Dalvik/ART、Doze、应用生命周期或厂商 ROM 行为；
+更换 Bun 底座、最低 Android API 或涉及系统服务时仍以物理设备为最终参考。具体隔离、触发条件和
+信任边界见 [`docs/ci.md`](docs/ci.md)。CI 与 Release 仍然只发布小型文本凭证和工具链 tag，
+**不发布 Claude 二进制**。
 
 Bun fork 的 [`bionic-aarch64.yml`](https://github.com/wmdhs12138/bun/actions/workflows/bionic-aarch64.yml)
 使用原生 ARM64 runner 从源码构建 Bionic Bun；手动启用 `build_claude` 时，还会用指定版本和不可变
@@ -249,6 +255,7 @@ tools/revive_patch.py     模块图嫁接和 ELF 修复
 tools/verify_graft.py     graft 闭环验证
 tools/tui_smoke.py        PTY/TUI 实机启动测试
 docs/format.md            Bun standalone 格式逆向记录
+docs/ci.md                Bionic 自动验收架构与发布边界
 evidence/                 最近一次实机构建凭证
 ```
 

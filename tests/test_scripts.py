@@ -22,6 +22,8 @@ POLYFILL = ROOT / "tools" / "cellsegmenter-polyfill.js"
 EMBED_PRELOAD = ROOT / "tools" / "embed_preload.py"
 INSTALL = ROOT / "install.sh"
 ENSURE_BUN = ROOT / "scripts" / "ensure-bun-base.sh"
+WORKFLOW = ROOT / ".github" / "workflows" / "build.yml"
+BIONIC_CI = ROOT / ".github" / "ci" / "bionic-build.sh"
 
 
 class VersionValidationTests(unittest.TestCase):
@@ -874,6 +876,53 @@ class ReleaseNotesTests(unittest.TestCase):
         self.assertIn("new-source-hash", notes)
         self.assertNotIn("stale-source-hash", notes)
         self.assertIn("make build VERSION=9.8.7", notes)
+
+    def test_reports_bionic_execution_without_waiting_for_device_snapshot(self):
+        manifest = {
+            "claude": "9.8.7",
+            "output_version": "9.8.7 (Claude Code)",
+            "output_sha256": "output-hash",
+            "base_bun": {},
+            "tui_smoke": {"ran": True, "result": "pass"},
+            "ci_acceptance": {
+                "runtime": "termux-docker/bionic",
+                "architecture": "aarch64",
+                "version_probe": "pass",
+                "tui_smoke": "pass",
+            },
+        }
+        notes = self.module.claude_notes(manifest, {}, "toolchain-test")
+        self.assertIn("ARM64 runner + 固定 termux-docker", notes)
+        self.assertIn("常规 Claude 版本更新不再等待维护者手机手工放行", notes)
+        self.assertNotIn("只有结构校验数据", notes)
+
+
+class BionicCIWiringTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.workflow = WORKFLOW.read_text()
+        cls.script = BIONIC_CI.read_text()
+
+    def test_uses_pinned_termux_image_on_native_arm_runner(self):
+        self.assertIn("runs-on: ubuntu-24.04-arm", self.workflow)
+        self.assertRegex(
+            self.workflow,
+            r"termux/termux-docker@sha256:[0-9a-f]{64}",
+        )
+        self.assertIn("docker run --rm --privileged", self.workflow)
+
+    def test_bionic_path_executes_candidate_and_requires_tui(self):
+        self.assertNotIn("SKIP_RUN", self.script)
+        self.assertIn('./dist/claude --version', self.script)
+        self.assertIn('smoke.get("ran") is True', self.script)
+        self.assertIn('smoke.get("result") == "pass"', self.script)
+
+    def test_binary_is_not_selected_for_artifact_upload(self):
+        upload = self.workflow.split(
+            "- name: Upload Bionic reports (no binary)", 1
+        )[1].split("\n  release:", 1)[0]
+        self.assertNotIn("dist/claude\n", upload)
+        self.assertIn("dist/build-manifest.json", upload)
 
 
 if __name__ == "__main__":

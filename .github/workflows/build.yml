@@ -1,21 +1,28 @@
 name: build
 
-# Two jobs, split so that "we never publish the binary" is structural rather
-# than a promise:
+# The proprietary Claude binary exists only in the read-only Bionic build job.
+# Only explicitly named text reports cross into the write-enabled release job:
 #
-#   build   -- contents: read. Builds, verifies the graft closure (see
-#              tools/verify_graft.py -- the runner cannot execute the aarch64
-#              artifact), uploads text reports. Has no ability to publish
-#              anything, even by accident.
-#   release -- contents: write. Downloads those reports and cuts releases that
-#              carry CREDENTIALS ONLY (hashes / offsets / toolchain tag).
+#   tests   -- x64 regression tests; pull requests stop here.
+#   bionic  -- ARM64 runner + pinned termux-docker. Builds, directly executes
+#              and renders the Bionic artifact; contents remain read-only.
+#   release -- downloads the text reports and publishes credentials only.
 #
 # dist/claude is a modified copy of Anthropic's proprietary Claude Code and
 # must not be redistributed. The release job refuses any asset over 1 MiB,
-# which the 224 MB artifact would trip instantly.
+# which the ~235 MB artifact would trip instantly.
 
 on:
+  push:
+    branches: [main]
+  pull_request:
   workflow_dispatch:
+    inputs:
+      version:
+        description: Claude Code version, or latest
+        required: true
+        default: latest
+        type: string
   schedule:
     - cron: "0 3 * * *"
 
@@ -23,26 +30,32 @@ permissions:
   contents: read
 
 concurrency:
-  group: build
+  group: claude-code-termux-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  build:
+  resolve:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     outputs:
-      version: ${{ steps.latest.outputs.version }}
-      unreleased: ${{ steps.latest.outputs.unreleased }}
+      version: ${{ steps.version.outputs.version }}
+      unreleased: ${{ steps.version.outputs.unreleased }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # tags tell us what is already released
+          persist-credentials: false
 
-      - name: Resolve latest Claude Code version
-        id: latest
+      - name: Resolve requested Claude Code version
+        id: version
+        env:
+          REQUESTED: ${{ github.event_name == 'workflow_dispatch' && inputs.version || 'latest' }}
         run: |
           set -euo pipefail
-          V="$(curl -fsSL --max-time 30 https://downloads.claude.ai/claude-code-releases/latest)"
+          if [ "$REQUESTED" = latest ]; then
+            V="$(curl -fsSL --max-time 30 https://downloads.claude.ai/claude-code-releases/latest)"
+          else
+            V="${REQUESTED#v}"
+          fi
           if ! [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::bad version '$V'"
             exit 1
@@ -58,31 +71,60 @@ jobs:
             echo "v$V is unreleased"
           fi
 
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Run regression tests
         run: make test
 
-      - name: Build and verify (no execution on x64)
-        env:
-          SKIP_RUN: "1"
-        run: make build VERSION=${{ steps.latest.outputs.version }}
+  bionic:
+    needs: [resolve, tests]
+    if: >-
+      github.event_name != 'pull_request' &&
+      (github.event_name != 'schedule' || needs.resolve.outputs.unreleased == 'true')
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    env:
+      TERMUX_DOCKER_IMAGE: termux/termux-docker@sha256:66fb9c3f11ed1a5b2096a8e335fdee198567acc09cfe3b2753a6f85f4ef91ead
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
-      - name: Verify report version
+      - name: Build and test inside Bionic Termux
         env:
-          EXPECTED_VERSION: ${{ steps.latest.outputs.version }}
+          CLAUDE_VERSION: ${{ needs.resolve.outputs.version }}
         run: |
+          set -euo pipefail
+          docker pull "$TERMUX_DOCKER_IMAGE"
+          sudo chmod -R a+rwX "$GITHUB_WORKSPACE"
+          docker run --rm --privileged -e CLAUDE_VERSION_INPUT="$CLAUDE_VERSION" -e TERMUX_DOCKER_IMAGE="$TERMUX_DOCKER_IMAGE" -v "$GITHUB_WORKSPACE:/data/data/com.termux/files/home/claude-code-termux" -w /data/data/com.termux/files/home/claude-code-termux "$TERMUX_DOCKER_IMAGE" bash .github/ci/bionic-build.sh
+
+      - name: Verify Bionic acceptance manifest
+        env:
+          EXPECTED_VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
           python3 - <<'PY'
           import json, os
           with open("dist/build-manifest.json") as f:
-              actual = json.load(f)["claude"]
+              doc = json.load(f)
           expected = os.environ["EXPECTED_VERSION"]
-          if actual != expected:
-              raise SystemExit(f"manifest version mismatch: expected {expected}, got {actual}")
+          assert doc["claude"] == expected, doc
+          assert doc["output_version"].startswith(expected), doc
+          assert doc["tui_smoke"]["ran"] is True, doc
+          assert doc["tui_smoke"]["result"] == "pass", doc
+          assert doc["ci_acceptance"]["runtime"] == "termux-docker/bionic", doc
+          assert doc["ci_acceptance"]["architecture"] == "aarch64", doc
+          assert doc["ci_acceptance"]["version_probe"] == "pass", doc
+          print(json.dumps(doc, indent=2))
           PY
 
-      - name: Show build manifest
-        run: cat dist/build-manifest.json
-
-      - name: Upload reports (no binary)
+      - name: Upload Bionic reports (no binary)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-reports
@@ -96,19 +138,22 @@ jobs:
             work/embed-preload.log
             work/verify-graft.json
             work/revive-report.log
+            work/tui-smoke.json
+            work/tui-smoke.log
+            work/bionic-ci.txt
           retention-days: 7
           if-no-files-found: error
 
   release:
-    needs: build
+    needs: [resolve, bionic]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
-      VERSION: ${{ needs.build.outputs.version }}
-      UNRELEASED: ${{ needs.build.outputs.unreleased }}
+      VERSION: ${{ needs.resolve.outputs.version }}
+      UNRELEASED: ${{ needs.resolve.outputs.unreleased }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -187,7 +232,7 @@ jobs:
           echo "tag=$TC_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Cut Claude Code release if the version is new
-        if: needs.build.outputs.unreleased == 'true'
+        if: needs.resolve.outputs.unreleased == 'true'
         run: |
           set -euo pipefail
 
@@ -197,7 +242,7 @@ jobs:
             --toolchain "${{ steps.toolchain.outputs.tag }}"
 
           # Credentials only. Every asset must be small text; the guard is what
-          # keeps a future edit from quietly attaching dist/claude (224 MB).
+          # keeps a future edit from quietly attaching dist/claude (~235 MB).
           ASSETS="reports/dist/build-manifest.json
           reports/work/extract-report.json
           reports/work/native-abi.json
@@ -206,7 +251,10 @@ jobs:
           reports/work/embed-preload.json
           reports/work/embed-preload.log
           reports/work/verify-graft.json
-          reports/work/revive-report.log"
+          reports/work/revive-report.log
+          reports/work/tui-smoke.json
+          reports/work/tui-smoke.log
+          reports/work/bionic-ci.txt"
           for f in $ASSETS; do
             [ -f "$f" ] || { echo "::error::missing asset $f"; exit 1; }
             sz="$(stat -c%s "$f")"

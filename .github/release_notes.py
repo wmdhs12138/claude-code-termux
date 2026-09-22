@@ -42,6 +42,15 @@ def claude_notes(manifest, versions, toolchain):
     # Facts verify_graft.py checked about this artifact. Absent for manifests
     # built before that check existed, hence the dash instead of a fake value.
     g = m.get("graft") or {}
+    acceptance = m.get("ci_acceptance") or {}
+    bionic_pass = (
+        acceptance.get("runtime") == "termux-docker/bionic"
+        and acceptance.get("architecture") == "aarch64"
+        and acceptance.get("version_probe") == "pass"
+        and acceptance.get("tui_smoke") == "pass"
+        and (m.get("tui_smoke") or {}).get("ran") is True
+        and (m.get("tui_smoke") or {}).get("result") == "pass"
+    )
     graft_cell = "—"
     if g:
         graft_cell = (f"`{g.get('modules', '?')}` 模块 · entry `{g.get('entry_point', '?')}`"
@@ -58,9 +67,27 @@ def claude_notes(manifest, versions, toolchain):
             f"实机 `{short(dev_sha)}` vs CI `{short(ci_sha)}`。"
             "固定输入下不应出现这种情况，请核对版本锁、工具链和构建环境。"
         )
+    elif bionic_pass:
+        device_line = (
+            f"本 release 已在固定的 `termux-docker` **Bionic AArch64** 环境中直接执行 **{ver}**，"
+            "版本探针与真实 PTY/TUI 渲染均通过。常规 Claude 版本更新不再等待维护者手机手工放行；"
+            "物理 Android 仍用于 Bun 底座、最低 API 和系统生命周期相关变更。"
+        )
     else:
         device_line = (
-            f"⚠️ 维护者尚未在 **{ver}** 上做实机验证 —— 上表只有 CI 的结构校验数据。"
+            f"⚠️ **{ver}** 尚未通过 Bionic 执行验收或维护者实机验证 —— 上表只有结构校验数据。"
+        )
+
+    if bionic_pass:
+        ci_scope = (
+            "上表来自 **ARM64 runner + 固定 termux-docker 镜像**中的 Bionic 验收构建："
+            "产物由 Android linker 直接执行，版本探针和真实 PTY/TUI 渲染通过；同时校验了 "
+            "ELF/graft 闭环、模块图指纹与产物哈希。"
+        )
+    else:
+        ci_scope = (
+            "上表来自未执行产物的结构校验构建：校验了 ELF/aarch64 结构、graft 闭环、"
+            "模块图指纹与产物哈希，但没有 Bionic 运行时验收。"
         )
 
     return f"""# Claude Code {ver} · Termux 原生移植
@@ -92,9 +119,7 @@ sha256sum dist/claude
 
 ## 验证范围
 
-上表来自 **x64 runner 上的结构校验构建**（`SKIP_RUN=1`）：校验了 ELF/aarch64 结构、
-graft 闭环（`.bun` size 字段 → payload 长度 → trailer → 模块表）、模块图指纹与产物哈希，
-但**没有执行过该产物**（runner 跑不了 bionic aarch64）。
+{ci_scope}
 
 {device_line}
 
