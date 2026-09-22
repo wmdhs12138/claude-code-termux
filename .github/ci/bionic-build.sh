@@ -12,7 +12,10 @@ pkg install -y \
 echo "::endgroup::"
 
 cd "$ROOT"
-make test
+# The separate tests job is a hard dependency of this job. Do not repeat those
+# host-side fixture tests here: several intentionally create conventional
+# /bin/sh and /usr/bin/env scripts, paths that a real Termux filesystem does
+# not provide. This container is reserved for the checks that need Bionic.
 SMOKE_SECONDS="${SMOKE_SECONDS:-10}" make build VERSION="$VERSION"
 
 ACTUAL_VERSION="$(python3 -c 'import json; print(json.load(open("dist/build-manifest.json"))["claude"])')"
