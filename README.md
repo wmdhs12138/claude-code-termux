@@ -23,8 +23,8 @@ cd ~/claude-code-termux
 claude
 ```
 
-安装器会补齐依赖，在本机下载、构建并验证最新版 Claude，然后原子安装到
-`$PREFIX/bin/claude`。指定版本可运行 `./install.sh VERSION`；目标目录可用
+安装器会补齐依赖，选取已通过 Bionic CI 的最新 Claude Release，在 Termux 临时目录构建、验证并原子安装到
+`$PREFIX/bin/claude`。指定版本可运行 `./install.sh VERSION`，这会使用当前克隆的源码构建；目标目录可用
 `CLAUDE_CODE_TERMUX_INSTALL_DIR` 覆盖。
 
 最终 ELF 超过 200 MiB，首次构建需要额外下载和临时空间。安装完成后可以删除克隆的项目目录，

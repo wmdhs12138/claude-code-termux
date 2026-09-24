@@ -11,6 +11,8 @@ usage() {
 Usage: ./install.sh [VERSION]
 
 Build and atomically install the native Bionic AArch64 Claude Code ELF.
+The default/latest build uses the most recent Bionic-accepted Release.
+An explicit version number builds from this checkout.
 
 Options:
   --no-build   Install an existing dist/claude (used by make install)
@@ -104,6 +106,10 @@ if [ "$BUILD" = "1" ]; then
     fi
   done
 
+  if [ "$VERSION" = "latest" ]; then
+    bash "$ROOT/scripts/install-approved.sh"
+    exit $?
+  fi
   echo "install: building Claude Code $VERSION" >&2
   bash "$ROOT/scripts/build.sh" "$VERSION"
 fi

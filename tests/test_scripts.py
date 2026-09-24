@@ -21,6 +21,7 @@ LAUNCHER = ROOT / "scripts" / "launcher.sh"
 POLYFILL = ROOT / "tools" / "cellsegmenter-polyfill.js"
 EMBED_PRELOAD = ROOT / "tools" / "embed_preload.py"
 INSTALL = ROOT / "install.sh"
+INSTALL_APPROVED = ROOT / "scripts" / "install-approved.sh"
 ENSURE_BUN = ROOT / "scripts" / "ensure-bun-base.sh"
 WORKFLOW = ROOT / ".github" / "workflows" / "build.yml"
 BIONIC_CI = ROOT / ".github" / "ci" / "bionic-build.sh"
@@ -425,6 +426,47 @@ class UpdateRecoveryTests(unittest.TestCase):
 
 
 class InstallerTests(unittest.TestCase):
+    def test_default_install_uses_approved_tag_and_temporary_build(self):
+        installer = INSTALL.read_text()
+        approved = INSTALL_APPROVED.read_text()
+        self.assertIn('if [ "$VERSION" = "latest" ]; then', installer)
+        self.assertIn('bash "$ROOT/scripts/install-approved.sh"', installer)
+        self.assertIn('"$repo_url/releases/latest"', approved)
+        self.assertIn('source_tag="$release_tag"', approved)
+        self.assertIn('releases/download/$toolchain_tag/build-manifest.json', approved)
+        self.assertIn('$tmp_root/claude-code-termux-install.XXXXXX', approved)
+        self.assertIn('built_hashes" != "$expected_hashes', approved)
+        self.assertIn('bash "$source_dir/install.sh" --no-build', approved)
+        self.assertNotIn('refs/heads/main', approved)
+
+    def test_default_install_rejects_unaccepted_release_manifest(self):
+        source = INSTALL_APPROVED.read_text()
+        script = source.split('python3 - "$path" "$version" "$require_acceptance" <<\'PY\'\n', 1)[1].split(
+            "\nPY\n}", 1
+        )[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "manifest.json"
+            doc = {
+                "claude": "2.1.281",
+                "claude_linux_arm64_sha256": "a" * 64,
+                "base_bun": {"archive_sha256": "b" * 64, "binary_sha256": "c" * 64},
+                "tui_smoke": {"ran": True, "result": "pass"},
+                "ci_acceptance": {
+                    "runtime": "termux-docker/bionic",
+                    "architecture": "aarch64",
+                    "version_probe": "pass",
+                    "tui_smoke": "pass",
+                },
+            }
+            path.write_text(json.dumps(doc))
+            args = [sys.executable, "-", str(path), "2.1.281", "1"]
+            accepted = subprocess.run(args, input=script, text=True, capture_output=True)
+            doc["ci_acceptance"]["tui_smoke"] = "fail"
+            path.write_text(json.dumps(doc))
+            rejected = subprocess.run(args, input=script, text=True, capture_output=True)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertNotEqual(rejected.returncode, 0)
+
     def test_defaults_to_termux_prefix_bin(self):
         source = INSTALL.read_text()
         self.assertIn(
