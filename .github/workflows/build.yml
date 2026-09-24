@@ -208,12 +208,20 @@ jobs:
               --predecessor "$PREV" --changelog changelog.txt \
               --versions versions.json
 
+            # A newer toolchain may be accepted for the same Claude version.
+            # Its manifest lets the updater prove that pairing passed Bionic CI.
+            MANIFEST=reports/dist/build-manifest.json
+            [ -f "$MANIFEST" ] || { echo "::error::missing $MANIFEST"; exit 1; }
+            [ "$(stat -c%s "$MANIFEST")" -le 1048576 ] || {
+              echo "::error::toolchain manifest exceeds 1 MiB"; exit 1;
+            }
+
             # --latest=false: a toolchain tag is not a newer version of the thing
             # people come here for, and /releases/latest has to keep resolving to
             # the Claude Code release. Without it GitHub marks the newest release
             # as Latest, which for a same-run pair is this one.
             gh release create "$TC_TAG" --title "工具链 v$N ($TC_FP)" \
-              --latest=false --notes-file tc-notes.md
+              --latest=false --notes-file tc-notes.md "$MANIFEST"
             echo "released $TC_TAG"
           fi
 

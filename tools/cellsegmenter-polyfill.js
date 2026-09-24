@@ -184,16 +184,70 @@ run_cache_cleanup() {
   fi
 }
 
-latest="$(curl -fsSL --max-time 30 https://downloads.claude.ai/claude-code-releases/latest)"
-case "$latest" in
-  ''|*[!0-9.]*) echo "claude update: invalid latest version '$latest'" >&2; exit 1 ;;
-esac
+release_url="$(curl -fsSIL --max-time 30 -o /dev/null -w '%{url_effective}' \
+  https://github.com/wmdhs12138/claude-code-termux/releases/latest)"
+if [[ "$release_url" =~ ^https://github\.com/wmdhs12138/claude-code-termux/releases/tag/(v([0-9]+\.[0-9]+\.[0-9]+)(-r[1-9][0-9]*)?)$ ]]; then
+  release_tag="$(basename "$release_url")"
+  latest="$(printf '%s' "$release_tag" | sed -E 's/^v([0-9]+\.[0-9]+\.[0-9]+)(-r[1-9][0-9]*)?$/\1/')"
+else
+  echo "claude update: no valid, CI-approved Claude Release: $release_url" >&2
+  exit 1
+fi
+
+manifest_hashes() {
+  local require_acceptance="$1"
+  python3 -c '
+import json
+import re
+import sys
+
+try:
+    doc = json.load(sys.stdin)
+    bun = doc["base_bun"]
+    if doc["claude"] != sys.argv[1]:
+        raise ValueError("Claude version mismatch")
+    values = (doc["claude_linux_arm64_sha256"],
+              bun["archive_sha256"], bun["binary_sha256"])
+    if any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value)
+           for value in values):
+        raise ValueError("invalid input SHA-256")
+    smoke = doc["tui_smoke"]
+    if smoke.get("ran") is not True or smoke.get("result") != "pass":
+        raise ValueError("TUI smoke did not pass")
+    if sys.argv[2] == "1":
+        acceptance = doc["ci_acceptance"]
+        if (acceptance.get("runtime") != "termux-docker/bionic"
+                or acceptance.get("architecture") != "aarch64"
+                or acceptance.get("version_probe") != "pass"
+                or acceptance.get("tui_smoke") != "pass"):
+            raise ValueError("Bionic acceptance did not pass")
+except (KeyError, TypeError, ValueError) as exc:
+    raise SystemExit(f"claude update: invalid build manifest: {exc}") from None
+print(" ".join(values))
+' "$latest" "$require_acceptance"
+}
+
+approved_hashes="$(curl -fsSL --max-time 30 \
+  "https://github.com/wmdhs12138/claude-code-termux/releases/download/$release_tag/build-manifest.json" \
+  | manifest_hashes 1)"
 current="$($target --version | awk '{print $1}')"
+if ! [[ "$current" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "claude update: invalid installed version '$current'" >&2
+  exit 1
+fi
+version_order="$(python3 - "$current" "$latest" <<'PY'
+import sys
+current, approved = (tuple(map(int, value.split("."))) for value in sys.argv[1:])
+print((current > approved) - (current < approved))
+PY
+)"
 
 if [ "$check" = "1" ]; then
-  printf 'current: %s\nlatest:  %s\n' "$current" "$latest"
-  if [ "$current" = "$latest" ]; then
+  printf 'current: %s\nlatest approved: %s (%s)\n' "$current" "$latest" "$release_tag"
+  if [ "$version_order" = "0" ]; then
     echo "Claude Code is up to date"
+  elif [ "$version_order" = "1" ]; then
+    echo "Installed version is newer than the latest approved Release"
   else
     echo "Claude Code update available"
   fi
@@ -206,8 +260,12 @@ if ! flock -n 7; then
   echo "claude update: another update is already running" >&2
   exit 1
 fi
-if [ "$force" != "1" ] && [ "$current" = "$latest" ]; then
-  echo "Claude Code $current is already up to date (use --force to rebuild)"
+if [ "$force" != "1" ] && [ "$version_order" != "-1" ]; then
+  if [ "$version_order" = "0" ]; then
+    echo "Claude Code $current is already up to date (use --force to rebuild)"
+  else
+    echo "Claude Code $current is newer than the latest approved Release $latest; use --force to rebuild $latest"
+  fi
   active_bun_sha=""
   if [ -r "$cache_root/active-bun-sha256" ]; then
     read -r active_bun_sha < "$cache_root/active-bun-sha256" || active_bun_sha=""
@@ -217,14 +275,6 @@ if [ "$force" != "1" ] && [ "$current" = "$latest" ]; then
   exit 0
 fi
 
-commit="$(git ls-remote https://github.com/wmdhs12138/claude-code-termux.git refs/heads/main \
-  | awk 'NR == 1 {print $1}')"
-if ! [[ "$commit" =~ ^[0-9a-f]{40}$ ]]; then
-  echo "claude update: invalid toolchain commit '$commit'" >&2
-  exit 1
-fi
-echo "claude update: $current -> $latest"
-echo "claude update: toolchain $commit"
 cleanup_claude_workdirs "$cache_root"
 
 tmp_root="$(printenv TMPDIR 2>/dev/null || true)"
@@ -240,6 +290,31 @@ cleanup_update() {
 }
 trap cleanup_update EXIT
 source_dir="$stage/source"
+source_tag="$release_tag"
+expected_hashes="$approved_hashes"
+approved_source_sha="$(printf '%s\n' "$approved_hashes" | awk '{print $1}')"
+toolchain_tag="$(git ls-remote --refs --tags https://github.com/wmdhs12138/claude-code-termux.git \
+  'refs/tags/toolchain-v*' | sed -n 's|.*refs/tags/\(toolchain-v[0-9]\+-[0-9a-f]\{7\}\)$|\1|p' \
+  | sort -V | tail -1)"
+if [ -n "$toolchain_tag" ]; then
+  if toolchain_hashes="$(curl -fsSL --max-time 30 \
+    "https://github.com/wmdhs12138/claude-code-termux/releases/download/$toolchain_tag/build-manifest.json" \
+    2>/dev/null | manifest_hashes 1 2>/dev/null)" \
+    && [ "$(printf '%s\n' "$toolchain_hashes" | awk '{print $1}')" = "$approved_source_sha" ]; then
+      source_tag="$toolchain_tag"
+      expected_hashes="$toolchain_hashes"
+  fi
+fi
+tag_ref="refs/tags/$source_tag"
+commit="$(git ls-remote --tags https://github.com/wmdhs12138/claude-code-termux.git \
+  "$tag_ref" "$tag_ref^{}" | awk -v tag="$tag_ref" \
+  '$2 == tag {commit = $1} $2 == tag "^{}" {commit = $1} END {print commit}')"
+if ! [[ "$commit" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "claude update: invalid commit for approved tag '$source_tag'" >&2
+  exit 1
+fi
+echo "claude update: $current -> $latest (approved $release_tag)"
+echo "claude update: toolchain $source_tag ($commit)"
 echo "claude update: downloading toolchain..."
 curl -fsSL --retry 3 --retry-all-errors \
   "https://github.com/wmdhs12138/claude-code-termux/archive/$commit.tar.gz" \
@@ -254,17 +329,12 @@ candidate="$source_dir/dist/claude"
 test -x "$candidate"
 candidate_version="$($candidate --version | awk '{print $1}')"
 test "$candidate_version" = "$latest"
-active_bun_sha="$(python3 - "$source_dir/dist/build-manifest.json" <<'PY'
-import json
-import re
-import sys
-
-value = json.load(open(sys.argv[1]))["base_bun"]["binary_sha256"]
-if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
-    raise SystemExit("invalid Bun SHA-256 in build manifest")
-print(value)
-PY
-)"
+built_hashes="$(manifest_hashes 0 < "$source_dir/dist/build-manifest.json")"
+if [ "$built_hashes" != "$expected_hashes" ]; then
+  echo "claude update: built inputs differ from approved Release; keeping current Claude" >&2
+  exit 1
+fi
+active_bun_sha="$(printf '%s\n' "$built_hashes" | awk '{print $3}')"
 marker_replacement="$(mktemp "$cache_root/.active-bun-sha256.XXXXXX")"
 printf '%s\n' "$active_bun_sha" > "$marker_replacement"
 

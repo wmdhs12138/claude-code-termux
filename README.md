@@ -33,14 +33,15 @@ claude
 ## 更新
 
 ```bash
-claude update --check   # 只检查，不修改文件
-claude update           # 有新版时构建并替换
-claude update --force   # 强制用最新工具链重新构建
+claude update --check   # 检查最新已验收版本，不修改文件
+claude update           # 有已验收新版时构建并替换
+claude update --force   # 用已验收的最新工具链重新构建
 ```
 
-这里不会调用 Claude 官方更新器，因为它会下载不能在 Termux 运行的 glibc 产物。内置更新器会获取
-本项目当前工具链，校验官方 Claude 与固定 Bionic Bun，在 Termux 临时目录构建候选，完成版本和 TUI 检查后
-才原子替换当前命令。下载、构建或验证失败时，原有 `claude` 保持不变。
+这里不会调用 Claude 官方更新器，因为它会下载不能在 Termux 运行的 glibc 产物。内置更新器只采用
+本项目已通过 Bionic CI 的 Claude Release；同版本工具链更新也须有匹配的验收清单。它在 Termux
+临时目录构建候选，核对官方输入哈希、版本和 TUI 结果后才原子替换当前命令。下载、构建或验证失败时，
+原有 `claude` 保持不变。上游刚发布但尚未通过 CI 的版本不会出现在 `claude update --check` 中。
 
 官方目前只发布完整 standalone，没有跨版本差分包；HTTP Range 只能续传中断的单次下载。因此旧
 Claude 包不会加速下一版本更新。官方 Claude、工具链源码和构建中间产物都放在 `$TMPDIR`，更新

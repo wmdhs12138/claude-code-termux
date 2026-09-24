@@ -70,7 +70,7 @@ def toolchain_notes(toolchain, fingerprint, predecessor, changelog, versions_doc
     return f"""# 工具链 {toolchain.split("-")[1]} (`{fingerprint}`)
 
 用于在 Termux 构建 Bionic AArch64 Claude Code；当前固定 Bun `{base}`。
-本 Release 只记录工具链版本，不提供 Claude 二进制。
+本 Release 附当次 Bionic 验收清单，不提供 Claude 二进制。
 
 {scope}
 

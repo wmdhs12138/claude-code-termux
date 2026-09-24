@@ -83,9 +83,14 @@ class VersionValidationTests(unittest.TestCase):
         )
         self.assertIn('scripts/ensure-bun-base.sh', BUILD.read_text())
 
-    def test_embedded_update_resolves_main_without_github_api_quota(self):
+    def test_embedded_update_uses_approved_releases_without_github_api_quota(self):
         source = POLYFILL.read_text()
-        self.assertIn('git ls-remote https://github.com/wmdhs12138/claude-code-termux.git', source)
+        self.assertIn('claude-code-termux/releases/latest', source)
+        self.assertIn('releases/download/$release_tag/build-manifest.json', source)
+        self.assertIn('releases/download/$toolchain_tag/build-manifest.json', source)
+        self.assertIn('git ls-remote --tags https://github.com/wmdhs12138/claude-code-termux.git', source)
+        self.assertNotIn('refs/heads/main', source)
+        self.assertNotIn('claude-code-releases/latest', source)
         self.assertNotIn('api.github.com/repos/wmdhs12138/claude-code-termux/commits/main', source)
         self.assertIn('commands=(bash curl git python3', INSTALL.read_text())
 
@@ -501,11 +506,54 @@ class CellSegmenterPolyfillTests(unittest.TestCase):
     def test_embeds_atomic_self_update(self):
         source = POLYFILL.read_text()
         self.assertIn('argv[ai] === "update" || argv[ai] === "upgrade"', source)
-        self.assertIn('https://downloads.claude.ai/claude-code-releases/latest', source)
-        self.assertIn('claude-code-termux.git refs/heads/main', source)
+        self.assertIn('claude-code-termux/releases/latest', source)
+        self.assertIn('source_tag="$release_tag"', source)
+        self.assertIn('built_hashes" != "$expected_hashes', source)
         self.assertIn('mv -f "$replacement" "$target"', source)
         self.assertIn('updateArgs.indexOf("--check")', source)
         self.assertIn('updateArgs.indexOf("--force")', source)
+
+    def test_embedded_update_shell_syntax(self):
+        source = POLYFILL.read_text()
+        script = source.split('var updateScript = String.raw`\n', 1)[1].split('\n`;', 1)[0]
+        proc = subprocess.run(["bash", "-n"], input=script, text=True, capture_output=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_approved_manifest_requires_bionic_acceptance_and_matching_inputs(self):
+        source = POLYFILL.read_text()
+        script = source.split("python3 -c '\n", 1)[1].split(
+            "\n' \"$latest\" \"$require_acceptance\"", 1
+        )[0]
+        digest = "a" * 64
+        manifest = {
+            "claude": "2.1.281",
+            "claude_linux_arm64_sha256": digest,
+            "base_bun": {"archive_sha256": "b" * 64, "binary_sha256": "c" * 64},
+            "tui_smoke": {"ran": True, "result": "pass"},
+            "ci_acceptance": {
+                "runtime": "termux-docker/bionic",
+                "architecture": "aarch64",
+                "version_probe": "pass",
+                "tui_smoke": "pass",
+            },
+        }
+
+        def validate(doc):
+            return subprocess.run(
+                [sys.executable, "-c", script, "2.1.281", "1"],
+                input=json.dumps(doc), text=True, capture_output=True,
+            )
+
+        good = validate(manifest)
+        self.assertEqual(good.returncode, 0, good.stderr)
+        self.assertEqual(good.stdout.strip(), f"{digest} {'b' * 64} {'c' * 64}")
+        for edit in (
+            {"ci_acceptance": {}},
+            {"tui_smoke": {"ran": True, "result": "fail"}},
+            {"claude_linux_arm64_sha256": "bad"},
+        ):
+            rejected = validate({**manifest, **edit})
+            self.assertNotEqual(rejected.returncode, 0)
 
     def test_self_update_uses_termux_tmp_and_only_persists_bun(self):
         source = POLYFILL.read_text()
@@ -886,6 +934,13 @@ class BionicCIWiringTests(unittest.TestCase):
         )[1].split("\n  release:", 1)[0]
         self.assertNotIn("dist/claude\n", upload)
         self.assertIn("dist/build-manifest.json", upload)
+
+    def test_toolchain_release_attaches_accepted_manifest(self):
+        release = self.workflow.split("- name: Cut toolchain release", 1)[1].split(
+            "- name: Cut Claude Code release", 1
+        )[0]
+        self.assertIn('MANIFEST=reports/dist/build-manifest.json', release)
+        self.assertIn('--latest=false --notes-file tc-notes.md "$MANIFEST"', release)
 
 
 if __name__ == "__main__":
