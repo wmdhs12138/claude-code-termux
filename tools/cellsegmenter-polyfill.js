@@ -293,9 +293,13 @@ source_dir="$stage/source"
 source_tag="$release_tag"
 expected_hashes="$approved_hashes"
 approved_source_sha="$(printf '%s\n' "$approved_hashes" | awk '{print $1}')"
-toolchain_tag="$(git ls-remote --refs --tags https://github.com/wmdhs12138/claude-code-termux.git \
-  'refs/tags/toolchain-v*' | sed -n 's|.*refs/tags/\(toolchain-v[0-9]\+-[0-9a-f]\{7\}\)$|\1|p' \
-  | sort -V | tail -1)"
+toolchain_tag=""
+if toolchain_refs="$(git ls-remote --refs --tags \
+  https://github.com/wmdhs12138/claude-code-termux.git 'refs/tags/toolchain-v*')"; then
+  toolchain_tag="$(printf '%s\n' "$toolchain_refs" \
+    | sed -n 's|.*refs/tags/\(toolchain-v[0-9]\+-[0-9a-f]\{7\}\)$|\1|p' \
+    | sort -V | tail -1)"
+fi
 if [ -n "$toolchain_tag" ]; then
   if toolchain_hashes="$(curl -fsSL --max-time 30 \
     "https://github.com/wmdhs12138/claude-code-termux/releases/download/$toolchain_tag/build-manifest.json" \
