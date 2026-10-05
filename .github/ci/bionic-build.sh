@@ -6,7 +6,9 @@ VERSION="${CLAUDE_VERSION_INPUT:-latest}"
 
 echo "::group::Install Termux build dependencies"
 pkg update -y
-pkg install -y \
+apt_options=(-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
+pkg upgrade -y "${apt_options[@]}"
+pkg install -y "${apt_options[@]}" \
   bash binutils coreutils curl file gawk git make python ripgrep sed tar unzip \
   util-linux
 echo "::endgroup::"

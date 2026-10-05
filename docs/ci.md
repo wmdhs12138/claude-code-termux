@@ -9,7 +9,7 @@ filesystem layout.
 ```text
 ubuntu-24.04-arm GitHub runner
 └── pinned termux/termux-docker image
-    ├── install the small Termux build toolset
+    ├── refresh package indexes, upgrade Termux and install current build dependencies
     ├── download and verify official Claude + pinned Bionic Bun
     ├── extract, adapt and graft the standalone module graph
     ├── execute the resulting Bionic AArch64 ELF

@@ -20,7 +20,7 @@ Options:
 
 Environment:
   CLAUDE_CODE_TERMUX_INSTALL_DIR       destination directory (default: $PREFIX/bin)
-  CLAUDE_CODE_TERMUX_SKIP_DEPS=1       do not install missing Termux packages
+  CLAUDE_CODE_TERMUX_SKIP_DEPS=1       do not update or install Termux packages
   CLAUDE_CODE_TERMUX_ALLOW_UNSUPPORTED=1
                                        bypass Termux/AArch64/API checks
 EOF
@@ -42,6 +42,11 @@ for arg in "$@"; do
       ;;
   esac
 done
+
+if [ "$VERSION" != "latest" ] && ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "install: invalid version '$VERSION'; expected latest or X.Y.Z" >&2
+  exit 2
+fi
 
 if [ "${CLAUDE_CODE_TERMUX_ALLOW_UNSUPPORTED:-0}" != "1" ]; then
   if [ "$(uname -m)" != "aarch64" ]; then
@@ -70,12 +75,18 @@ if [ "${CLAUDE_CODE_TERMUX_ALLOW_UNSUPPORTED:-0}" != "1" ]; then
 fi
 
 if [ "$BUILD" = "1" ]; then
+  # Prefer native Termux tools over incompatible binaries injected into PATH.
+  if [ -n "${PREFIX:-}" ] && [ -d "$PREFIX/bin" ]; then
+    export PATH="$PREFIX/bin:$PATH"
+    hash -r
+  fi
   commands=(bash curl git python3 unzip rg flock sha256sum tar awk sed mktemp)
   packages=(bash curl git python unzip ripgrep util-linux coreutils tar gawk sed coreutils)
   missing_packages=()
 
   for i in "${!commands[@]}"; do
-    if ! command -v "${commands[$i]}" >/dev/null 2>&1; then
+    if ! command -v "${commands[$i]}" >/dev/null 2>&1 \
+      || { [ "${commands[$i]}" = "rg" ] && ! rg --version >/dev/null 2>&1; }; then
       package="${packages[$i]}"
       duplicate=0
       for queued in "${missing_packages[@]:-}"; do
@@ -85,18 +96,28 @@ if [ "$BUILD" = "1" ]; then
     fi
   done
 
-  if [ "${#missing_packages[@]}" -gt 0 ]; then
-    if [ "${CLAUDE_CODE_TERMUX_SKIP_DEPS:-0}" = "1" ]; then
+  if [ "${CLAUDE_CODE_TERMUX_SKIP_DEPS:-0}" = "1" ]; then
+    if [ "${#missing_packages[@]}" -gt 0 ]; then
       echo "install: missing packages: ${missing_packages[*]}" >&2
       exit 1
     fi
+  else
     if ! command -v pkg >/dev/null 2>&1; then
-      echo "install: missing packages and the Termux pkg command is unavailable" >&2
+      echo "install: the Termux pkg command is unavailable; use CLAUDE_CODE_TERMUX_SKIP_DEPS=1 with prepared dependencies" >&2
       exit 1
     fi
-    echo "install: installing missing packages: ${missing_packages[*]}" >&2
-    pkg install -y "${missing_packages[@]}"
-    hash -r
+    # Upgrade the complete Termux environment first: partial upgrades can leave
+    # libraries and their dependents at incompatible versions.
+    apt_options=(-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
+    echo "install: updating Termux packages and installing the latest dependencies" >&2
+    if pkg update -y && pkg upgrade -y "${apt_options[@]}" \
+      && pkg install -y "${apt_options[@]}" "${packages[@]}"; then
+      hash -r
+    else
+      status=$?
+      echo "install: dependency installation failed; if package versions conflict, run termux-change-repo to select a current mirror, then retry" >&2
+      exit "$status"
+    fi
   fi
 
   for command_name in "${commands[@]}"; do
@@ -120,7 +141,7 @@ if [ ! -x "$CANDIDATE" ]; then
   exit 1
 fi
 
-candidate_version="$($CANDIDATE --version 2>/dev/null | awk 'NR == 1 {print $1}')"
+candidate_version="$("$CANDIDATE" --version 2>/dev/null | awk 'NR == 1 {print $1}')"
 if [[ ! "$candidate_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "install: candidate version probe failed" >&2
   exit 1
@@ -146,7 +167,7 @@ replacement="$(mktemp "$INSTALL_DIR/.claude-install.XXXXXX")"
 trap 'rm -f "$replacement"' EXIT
 cp "$CANDIDATE" "$replacement"
 chmod 700 "$replacement"
-replacement_version="$($replacement --version 2>/dev/null | awk 'NR == 1 {print $1}')"
+replacement_version="$("$replacement" --version 2>/dev/null | awk 'NR == 1 {print $1}')"
 if [ "$replacement_version" != "$candidate_version" ]; then
   echo "install: copied candidate failed its version probe" >&2
   exit 1

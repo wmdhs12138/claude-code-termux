@@ -23,9 +23,13 @@ cd ~/claude-code-termux
 claude
 ```
 
-安装器会补齐依赖，选取已通过 Bionic CI 的最新 Claude Release，在 Termux 临时目录构建、验证并原子安装到
+安装器每次都会刷新软件包索引、升级 Termux 环境，并安装当前软件源提供的最新版依赖，随后选取已通过 Bionic CI 的最新 Claude Release，在 Termux 临时目录构建、验证并原子安装到
 `$PREFIX/bin/claude`。指定版本可运行 `./install.sh VERSION`，这会使用当前克隆的源码构建；目标目录可用
 `CLAUDE_CODE_TERMUX_INSTALL_DIR` 覆盖。
+
+如软件源过旧导致依赖版本冲突，运行 `termux-change-repo` 选择同步及时的镜像后重试。
+已自行准备依赖时，可设置 `CLAUDE_CODE_TERMUX_SKIP_DEPS=1` 跳过软件包更新和安装；
+`make install` 只安装现有产物，不更新软件包。Bionic Bun 底座仍采用经过验收的固定版本和 SHA-256。
 
 最终 ELF 超过 200 MiB，首次构建需要额外下载和临时空间。安装完成后可以删除克隆的项目目录，
 内置更新器不依赖它。

@@ -426,6 +426,103 @@ class UpdateRecoveryTests(unittest.TestCase):
 
 
 class InstallerTests(unittest.TestCase):
+    def test_updates_dependencies_even_when_all_commands_are_installed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            scripts = root / "scripts"
+            scripts.mkdir()
+            shutil.copy2(INSTALL, root / "install.sh")
+            (scripts / "build.sh").write_text("exit 39\n")
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            for name, body in {
+                "rg": "exit 0\n",
+                "pkg": 'echo "$*" >> "$PACKAGE_LOG"\n',
+            }.items():
+                command = bin_dir / name
+                command.write_text("#!/bin/sh\n" + body)
+                command.chmod(0o755)
+            log = root / "packages.log"
+            env = dict(os.environ)
+            env.update({
+                "PATH": f"{bin_dir}:{env['PATH']}",
+                "PREFIX": "",
+                "PACKAGE_LOG": str(log),
+                "CLAUDE_CODE_TERMUX_ALLOW_UNSUPPORTED": "1",
+                "CLAUDE_CODE_TERMUX_SKIP_DEPS": "0",
+            })
+            proc = subprocess.run(
+                ["bash", str(root / "install.sh"), "1.2.3"],
+                text=True, capture_output=True, env=env,
+            )
+            calls = log.read_text().splitlines()
+        self.assertEqual(proc.returncode, 39, proc.stdout + proc.stderr)
+        self.assertEqual(calls[0], "update -y")
+        self.assertTrue(calls[1].startswith("upgrade -y "))
+        self.assertIn("--force-confdef", calls[1])
+        self.assertIn("--force-confold", calls[1])
+        self.assertEqual(len(calls), 3)
+        self.assertIn("python", calls[2])
+        self.assertIn("ripgrep", calls[2])
+
+    def test_refreshes_package_index_and_explains_dependency_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name, body in {
+                "rg": "exit 127\n",
+                "pkg": 'echo "$*" >> "$PACKAGE_LOG"\n'
+                       'if [ "$1" = install ]; then exit 42; fi\n',
+            }.items():
+                command = root / name
+                command.write_text("#!/bin/sh\n" + body)
+                command.chmod(0o755)
+            log = root / "packages.log"
+            env = dict(os.environ)
+            env.update({
+                "PATH": f"{tmp}:{env['PATH']}",
+                "PREFIX": "",
+                "PACKAGE_LOG": str(log),
+                "CLAUDE_CODE_TERMUX_ALLOW_UNSUPPORTED": "1",
+                "CLAUDE_CODE_TERMUX_SKIP_DEPS": "0",
+            })
+            proc = subprocess.run(
+                ["bash", str(INSTALL)], text=True, capture_output=True, env=env,
+            )
+            calls = log.read_text().splitlines()
+        self.assertEqual(proc.returncode, 42, proc.stdout + proc.stderr)
+        self.assertEqual(calls[0], "update -y")
+        self.assertTrue(calls[1].startswith("upgrade -y "))
+        self.assertTrue(calls[2].startswith("install -y "))
+        self.assertIn("ripgrep", calls[2])
+        self.assertIn("termux-change-repo", proc.stderr)
+
+    def test_reports_ripgrep_when_path_command_cannot_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rg = Path(tmp) / "rg"
+            rg.write_text("#!/bin/sh\nexit 127\n")
+            rg.chmod(0o755)
+            env = dict(os.environ)
+            env.update({
+                "PATH": f"{tmp}:{env['PATH']}",
+                "PREFIX": "",
+                "CLAUDE_CODE_TERMUX_ALLOW_UNSUPPORTED": "1",
+                "CLAUDE_CODE_TERMUX_SKIP_DEPS": "1",
+            })
+            proc = subprocess.run(
+                ["bash", str(INSTALL)], text=True, capture_output=True, env=env,
+            )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("missing packages:", proc.stderr)
+        self.assertIn("ripgrep", proc.stderr)
+
+    def test_rejects_invalid_version_before_platform_or_dependency_checks(self):
+        proc = subprocess.run(
+            ["bash", str(INSTALL), "2.1.3/../../unexpected"],
+            text=True, capture_output=True,
+        )
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("invalid version", proc.stderr)
+
     def test_default_install_uses_approved_tag_and_temporary_build(self):
         installer = INSTALL.read_text()
         approved = INSTALL_APPROVED.read_text()
@@ -477,8 +574,8 @@ class InstallerTests(unittest.TestCase):
 
     def test_installs_direct_elf_atomically_and_backs_up_old_target(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp) / "project"
-            target_dir = Path(tmp) / "bin"
+            root = Path(tmp) / "project with spaces"
+            target_dir = Path(tmp) / "bin with spaces"
             (root / "dist").mkdir(parents=True)
             target_dir.mkdir()
             shutil.copy2(INSTALL, root / "install.sh")
@@ -951,6 +1048,11 @@ class ReleaseNotesTests(unittest.TestCase):
 
 
 class BionicCIWiringTests(unittest.TestCase):
+    def test_upgrades_termux_before_installing_dependencies(self):
+        script = BIONIC_CI.read_text()
+        self.assertLess(script.index("pkg update -y"), script.index("pkg upgrade -y"))
+        self.assertLess(script.index("pkg upgrade -y"), script.index("pkg install -y"))
+
     @classmethod
     def setUpClass(cls):
         cls.workflow = WORKFLOW.read_text()
