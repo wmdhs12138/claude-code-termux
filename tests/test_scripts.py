@@ -17,7 +17,6 @@ SMOKE = ROOT / "tools" / "tui_smoke.py"
 FETCH = ROOT / "scripts" / "fetch-claude.sh"
 BUILD = ROOT / "scripts" / "build.sh"
 UPDATE = ROOT / "scripts" / "update.sh"
-LAUNCHER = ROOT / "scripts" / "launcher.sh"
 POLYFILL = ROOT / "tools" / "cellsegmenter-polyfill.js"
 EMBED_PRELOAD = ROOT / "tools" / "embed_preload.py"
 INSTALL = ROOT / "install.sh"
@@ -372,57 +371,56 @@ class NativeAbiCheckTests(unittest.TestCase):
             self.module.analyze(self.graph([("/$bunfs/root/chunk-ink.js", src)]))
 
 
-class UpdateRecoveryTests(unittest.TestCase):
-    def test_broken_binary_is_rebuilt(self):
+class UpdateEntryPointTests(unittest.TestCase):
+    def run_make_update(self, install_dir):
+        env = dict(os.environ)
+        env["CLAUDE_CODE_TERMUX_INSTALL_DIR"] = str(install_dir)
+        return subprocess.run(
+            ["make", "-s", "-f", str(ROOT / "Makefile"), "update"],
+            cwd=install_dir.parent, text=True, capture_output=True, env=env,
+        )
+
+    def test_make_update_runs_the_installed_embedded_updater(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp) / "project"
+            install_dir = Path(tmp) / "bin"
+            install_dir.mkdir()
+            claude = install_dir / "claude"
+            claude.write_text('#!/bin/sh\necho "claude args: $*"\n')
+            claude.chmod(0o755)
+            proc = self.run_make_update(install_dir)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "claude args: update")
+
+    def test_make_update_requires_an_installed_claude(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            install_dir = Path(tmp) / "bin"
+            install_dir.mkdir()
+            proc = self.run_make_update(install_dir)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("run ./install.sh", proc.stderr)
+
+    def test_retired_launcher_update_points_to_installer_without_building(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project with spaces"
             scripts = root / "scripts"
-            fake_bin_dir = Path(tmp) / "fake-bin"
-            home = Path(tmp) / "home"
             scripts.mkdir(parents=True)
-            fake_bin_dir.mkdir()
-            home.mkdir()
             shutil.copy2(UPDATE, scripts / "update.sh")
-
-            current = root / "claude"
-            # A child inheriting stdout used to keep the updater's command
-            # substitution open forever after the main process exited.
-            current.write_text("#!/bin/sh\n(sleep 30) &\nexit 1\n")
-            current.chmod(0o755)
-            (scripts / "launcher.sh").write_text("#!/bin/sh\n# @ROOT@\n")
-            build = scripts / "build.sh"
-            build.write_text(
-                "#!/bin/sh\n"
-                "cat > \"$CLAUDE_CODE_TERMUX_BIN\" <<'EOF'\n"
-                "#!/bin/sh\necho '1.2.3 (Claude Code)'\nEOF\n"
-                "chmod +x \"$CLAUDE_CODE_TERMUX_BIN\"\n"
-            )
-            build.chmod(0o755)
-            curl = fake_bin_dir / "curl"
-            curl.write_text("#!/bin/sh\necho 1.2.3\n")
-            curl.chmod(0o755)
-
+            marker = Path(tmp) / "network-or-build"
+            for name in ("curl", "git"):
+                tool = Path(tmp) / name
+                tool.write_text(f'#!/bin/sh\ntouch "{marker}"\nexit 1\n')
+                tool.chmod(0o755)
+            (scripts / "build.sh").write_text(f'touch "{marker}"\n')
             env = dict(os.environ)
-            env.update(
-                {
-                    "PATH": f"{fake_bin_dir}:{env['PATH']}",
-                    "HOME": str(home),
-                    "CLAUDE_CODE_TERMUX_ROOT": str(root),
-                    "CLAUDE_CODE_TERMUX_BIN": str(current),
-                    "CLAUDE_CODE_TERMUX_INSTALL_DIR": str(home / "bin"),
-                    "CLAUDE_CODE_TERMUX_PROBE_TIMEOUT": "0.25",
-                }
-            )
+            env["PATH"] = f"{tmp}:{env['PATH']}"
             proc = subprocess.run(
                 ["bash", str(scripts / "update.sh"), "--force"],
-                text=True,
-                capture_output=True,
-                env=env,
+                text=True, capture_output=True, env=env,
             )
-
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertIn("current binary is not runnable", proc.stderr)
-        self.assertIn("updated: 1.2.3 (Claude Code)", proc.stdout)
+            touched = marker.exists()
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn(f'cd "{root}" && ./install.sh', proc.stderr)
+        self.assertFalse(touched)
 
 
 class InstallerTests(unittest.TestCase):
@@ -572,46 +570,79 @@ class InstallerTests(unittest.TestCase):
         )
         self.assertNotIn('default: ~/bin', source)
 
+    def install_candidate(self, root, target_dir, version):
+        candidate = root / "dist" / "claude"
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(INSTALL, root / "install.sh")
+        candidate.write_text(f"#!/bin/sh\necho '{version} (Claude Code)'\n")
+        candidate.chmod(0o755)
+        env = dict(os.environ)
+        env.update(
+            {
+                "CLAUDE_CODE_TERMUX_ALLOW_UNSUPPORTED": "1",
+                "CLAUDE_CODE_TERMUX_INSTALL_DIR": str(target_dir),
+            }
+        )
+        return subprocess.run(
+            ["bash", str(root / "install.sh"), "--no-build"],
+            text=True,
+            capture_output=True,
+            env=env,
+        )
+
     def test_installs_direct_elf_atomically_and_backs_up_old_target(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "project with spaces"
             target_dir = Path(tmp) / "bin with spaces"
-            (root / "dist").mkdir(parents=True)
             target_dir.mkdir()
-            shutil.copy2(INSTALL, root / "install.sh")
-
-            candidate = root / "dist" / "claude"
-            candidate.write_text("#!/bin/sh\necho '9.8.7 (Claude Code)'\n")
-            candidate.chmod(0o755)
             target = target_dir / "claude"
             target.write_text("old launcher\n")
             target.chmod(0o700)
 
-            env = dict(os.environ)
-            env.update(
-                {
-                    "CLAUDE_CODE_TERMUX_ALLOW_UNSUPPORTED": "1",
-                    "CLAUDE_CODE_TERMUX_INSTALL_DIR": str(target_dir),
-                }
-            )
-            proc = subprocess.run(
-                ["bash", str(root / "install.sh"), "--no-build"],
-                text=True,
-                capture_output=True,
-                env=env,
-            )
+            proc = self.install_candidate(root, target_dir, "9.8.7")
 
-            backups = list(target_dir.glob("claude.backup-*"))
+            backup = target_dir / ".claude.backup"
             leftovers = list(target_dir.glob(".claude-install.*"))
             target_text = target.read_text()
-            backup_text = backups[0].read_text() if len(backups) == 1 else None
+            backup_text = backup.read_text() if backup.exists() else None
 
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(target_text, "#!/bin/sh\necho '9.8.7 (Claude Code)'\n")
-        self.assertEqual(len(backups), 1)
         self.assertEqual(backup_text, "old launcher\n")
         self.assertEqual(leftovers, [])
         self.assertIn("installed:", proc.stdout)
+
+    def test_reinstall_keeps_one_backup_and_prunes_timestamped_copies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            target_dir = Path(tmp) / "bin"
+            target_dir.mkdir()
+            (target_dir / "claude").write_text("first\n")
+            legacy = [
+                target_dir / "claude.backup-20260916T010203Z",
+                target_dir / "claude.backup-20260916T010203Z.1",
+            ]
+            for path in legacy:
+                path.write_text("legacy\n")
+            unrelated = target_dir / "claude.backup-notes.txt"
+            unrelated.write_text("keep me\n")
+
+            first = self.install_candidate(root, target_dir, "1.0.0")
+            second = self.install_candidate(root, target_dir, "2.0.0")
+
+            backups = sorted(p.name for p in target_dir.iterdir() if "backup" in p.name)
+            backup_text = (target_dir / ".claude.backup").read_text()
+            legacy_left = [path.exists() for path in legacy]
+            unrelated_kept = unrelated.exists()
+
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        self.assertIn("removed:   2 old claude.backup-* file(s)", first.stdout)
+        self.assertNotIn("removed:", second.stdout)
+        self.assertEqual(backups, [".claude.backup", "claude.backup-notes.txt"])
+        self.assertEqual(backup_text, "#!/bin/sh\necho '1.0.0 (Claude Code)'\n")
+        self.assertEqual(legacy_left, [False, False])
+        self.assertTrue(unrelated_kept)
 
     def test_make_install_no_longer_writes_a_launcher(self):
         makefile = (ROOT / "Makefile").read_text()
@@ -831,61 +862,6 @@ class EmbeddedPreloadTests(unittest.TestCase):
             self.assertTrue(source.endswith(b"console.log('entry')"))
             self.assertEqual(struct.unpack_from("<II", data, entry_record + 24), (0, 0))
             self.assertFalse(json.loads(report.read_text())["runtime_external_preload_required"])
-
-
-class LauncherDirectTests(unittest.TestCase):
-    def install_launcher(self, root, with_polyfill=True):
-        scripts = root / "scripts"
-        scripts.mkdir(parents=True)
-        launcher = scripts / "launcher.sh"
-        launcher.write_text(LAUNCHER.read_text().replace("@ROOT@", str(root)))
-        launcher.chmod(0o755)
-        if with_polyfill:
-            tools = root / "tools"
-            tools.mkdir()
-            (tools / "cellsegmenter-polyfill.js").write_text("// stub\n")
-        binary = root / "dist" / "claude"
-        binary.parent.mkdir()
-        binary.write_text('#!/bin/sh\necho "BUN_OPTIONS=${BUN_OPTIONS:-unset}"\necho "args=$*"\n')
-        binary.chmod(0o755)
-        return launcher
-
-    def run_launcher(self, launcher, env=None):
-        base = {
-            "PATH": os.environ["PATH"],
-            "HOME": str(launcher.parents[1] / "home"),
-        }
-        Path(base["HOME"]).mkdir(exist_ok=True)
-        if env:
-            base.update(env)
-        return subprocess.run(
-            ["bash", str(launcher), "--version"], text=True, capture_output=True, env=base
-        )
-
-    def test_runs_grafted_binary_without_external_preload(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp) / "project"
-            launcher = self.install_launcher(root)
-            proc = self.run_launcher(launcher)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("BUN_OPTIONS=unset", proc.stdout)
-        self.assertIn("args=--version", proc.stdout)
-
-    def test_keeps_user_bun_options_unchanged(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp) / "project"
-            launcher = self.install_launcher(root)
-            proc = self.run_launcher(launcher, {"BUN_OPTIONS": "--smol"})
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("BUN_OPTIONS=--smol", proc.stdout)
-
-    def test_launcher_does_not_require_polyfill_file(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp) / "project"
-            launcher = self.install_launcher(root, with_polyfill=False)
-            proc = self.run_launcher(launcher)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("BUN_OPTIONS=unset", proc.stdout)
 
 
 class TuiSmokeTests(unittest.TestCase):

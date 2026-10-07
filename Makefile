@@ -11,8 +11,14 @@ VERSION ?= latest
 build:
 	bash scripts/build.sh $(VERSION)
 
+# A shortcut to the updater embedded in the installed ELF, so there is exactly
+# one update path and it follows only Bionic-accepted Releases.
 update:
-	bash scripts/update.sh
+	@claude_bin="$${CLAUDE_CODE_TERMUX_INSTALL_DIR:-$${PREFIX:-$$HOME}/bin}/claude"; \
+	if [ ! -x "$$claude_bin" ]; then \
+	  echo "update: $$claude_bin is not installed; run ./install.sh" >&2; exit 1; \
+	fi; \
+	"$$claude_bin" update
 
 fetch:
 	bash scripts/fetch-claude.sh $(VERSION)
@@ -30,7 +36,7 @@ install:
 	bash install.sh --no-build
 
 uninstall:
-	install_dir="$${CLAUDE_CODE_TERMUX_INSTALL_DIR:-$${PREFIX:-$$HOME}/bin}"; rm -f "$$install_dir/claude"
+	install_dir="$${CLAUDE_CODE_TERMUX_INSTALL_DIR:-$${PREFIX:-$$HOME}/bin}"; rm -f "$$install_dir/claude" "$$install_dir/.claude.backup"
 
 clean:
 	flock -n .build.lock -c 'rm -f work/claude-graph.bin dist/claude'

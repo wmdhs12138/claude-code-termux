@@ -151,15 +151,13 @@ INSTALL_DIR="${CLAUDE_CODE_TERMUX_INSTALL_DIR:-${PREFIX:-$HOME}/bin}"
 TARGET="$INSTALL_DIR/claude"
 mkdir -p "$INSTALL_DIR"
 
+# Keep exactly one rollback copy of the previous target. At ~225 MB each, a
+# copy per reinstall quickly eats phone storage, and a dotfile stays out of
+# command completion even though it sits in a PATH directory.
 backup=""
 if [ -e "$TARGET" ] || [ -L "$TARGET" ]; then
-  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-  backup="$TARGET.backup-$stamp"
-  suffix=0
-  while [ -e "$backup" ] || [ -L "$backup" ]; do
-    suffix=$((suffix + 1))
-    backup="$TARGET.backup-$stamp.$suffix"
-  done
+  backup="$INSTALL_DIR/.claude.backup"
+  rm -f "$backup"
   cp -pP "$TARGET" "$backup"
 fi
 
@@ -175,8 +173,21 @@ fi
 mv -f "$replacement" "$TARGET"
 trap - EXIT
 
+# Earlier installers left one timestamped copy per run; the backup above
+# supersedes them. Match their exact name format so nothing else is touched.
+pruned=0
+if [ -n "$backup" ]; then
+  for old in "$INSTALL_DIR"/claude.backup-*; do
+    if [[ "${old##*/}" =~ ^claude\.backup-[0-9]{8}T[0-9]{6}Z(\.[0-9]+)?$ ]]; then
+      rm -f "$old"
+      pruned=$((pruned + 1))
+    fi
+  done
+fi
+
 echo "installed: $TARGET ($replacement_version)"
 if [ -n "$backup" ]; then echo "backup:    $backup"; fi
+if [ "$pruned" -gt 0 ]; then echo "removed:   $pruned old claude.backup-* file(s)"; fi
 case ":${PATH:-}:" in
   *":$INSTALL_DIR:"*) ;;
   *) echo "PATH:      add 'export PATH=\"$INSTALL_DIR:\$PATH\"' to your shell profile" ;;
