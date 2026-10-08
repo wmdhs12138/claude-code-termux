@@ -13,8 +13,15 @@ Checks:
   * Bun.ant.* reads stay inside the known set. getPeerPid/getPeerUid/
     memoryPressureLevel/setDumpable are optional probes that degrade by
     themselves on runtimes that lack them.
-  * Modules that construct Bun.ant.CellSegmenter only call the native members
-    the polyfill implements, and still call every member it relies on.
+  * Modules that construct Bun.ant.CellSegmenter, together with the modules
+    that import the factory wrapping that constructor, only call the native
+    members the polyfill implements, and still call every member it relies on.
+    The importers matter since 2.1.294: the bundler hoisted the constructor
+    into a tiny shared chunk that exports a factory, and the Ink code calling
+    segment()/paint() moved to a chunk importing it. Only direct named imports
+    are followed; a re-export layer or namespace import in between hides the
+    call sites, which shows up as missing members -- a build failure, never a
+    silent pass.
   * setCell() is reported but not required: it is part of the ABI and the
     polyfill implements it, yet current src/ink only uses it for the ellipsis
     path.
@@ -51,6 +58,9 @@ CELL_SEGMENTER = re.compile(rb'Bun\.ant\??\.CellSegmenter')
 CELL_SEGMENTER_TOKEN = re.compile(rb'CellSegmenter')
 NATIVE_MEMBER = re.compile(rb'\.native\.([A-Za-z_$][\w$]*)')
 SET_CELL = re.compile(rb'\.setCell\s*\(')
+FUNCTION_DECL = re.compile(rb'function\s+([\w$]+)\s*\(')
+EXPORT_LIST = re.compile(rb'export\s*\{([^}]*)\}')
+IMPORT_LIST = re.compile(rb'import\s*\{([^}]*)\}\s*from\s*["\']([^"\']+)["\']')
 
 
 class DriftError(Exception):
@@ -68,18 +78,47 @@ def module_records(data):
     return mod_off, mod_len, stride, mod_len // stride
 
 
+def specifiers(clause):
+    """(name, alias) pairs from the inside of an import/export {...} list."""
+    for part in clause.split(b','):
+        words = part.split()
+        if len(words) == 3 and words[1] == b'as':
+            yield words[0], words[2]
+        elif len(words) == 1:
+            yield words[0], words[0]
+
+
+def factory_exports(src):
+    """Names under which a module exports the function that wraps
+    `new Bun.ant.CellSegmenter`. The shared chunk also exports unrelated
+    constants that hundreds of modules import, so importers are matched on the
+    factory alone, not on the chunk path."""
+    wrappers = set()
+    for m in CELL_SEGMENTER.finditer(src):
+        decls = list(FUNCTION_DECL.finditer(src, 0, m.start()))
+        if decls:
+            wrappers.add(decls[-1].group(1))
+    return {alias for clause in EXPORT_LIST.finditer(src)
+            for name, alias in specifiers(clause.group(1)) if name in wrappers}
+
+
+def basename(path):
+    return path.rsplit(b'/', 1)[-1]
+
+
 def analyze(data):
     mod_off, mod_len, stride, count = module_records(data)
-    bun_ant = set()
-    cell_modules = []
-    native = set()
-    set_cell = False
-    token_seen = False
+    modules = []
     for i in range(count):
         rec = mod_off + i * stride
         name_off, name_len, src_off, src_len = struct.unpack_from('<IIII', data, rec)
         name = data[name_off:name_off + name_len].decode('utf-8', 'replace')
-        src = data[src_off:src_off + src_len]
+        modules.append((name, data[src_off:src_off + src_len]))
+
+    bun_ant = set()
+    cell_modules = []
+    token_seen = False
+    for name, src in modules:
         # Checked before the `continue` below: a module that mentions the type
         # without a Bun.ant.* read is exactly the shape a rename produces.
         if not token_seen and CELL_SEGMENTER_TOKEN.search(src):
@@ -90,12 +129,34 @@ def analyze(data):
         bun_ant |= members
         if CELL_SEGMENTER.search(src):
             cell_modules.append(name)
+
+    factories = {}
+    for name, src in modules:
+        if name in cell_modules:
+            exported = factory_exports(src)
+            if exported:
+                factories[basename(name.encode())] = exported
+    consumer_modules = []
+    for name, src in modules:
+        if name in cell_modules or not any(b in src for b in factories):
+            continue
+        for m in IMPORT_LIST.finditer(src):
+            wanted = factories.get(basename(m.group(2)), ())
+            if any(n in wanted for n, _ in specifiers(m.group(1))):
+                consumer_modules.append(name)
+                break
+    scanned = set(cell_modules) | set(consumer_modules)
+    native = set()
+    set_cell = False
+    for name, src in modules:
+        if name in scanned:
             native |= {m.group(1).decode() for m in NATIVE_MEMBER.finditer(src)}
             set_cell = set_cell or SET_CELL.search(src) is not None
 
     report = {
         'required': bool(cell_modules),
         'modules': cell_modules,
+        'consumer_modules': consumer_modules,
         'bun_ant_members': sorted(bun_ant),
         'native_members': sorted(native),
         'set_cell': set_cell,
@@ -122,6 +183,8 @@ def analyze(data):
     if missing:
         raise DriftError(
             'CellSegmenter no longer uses ' + ', '.join(sorted(missing)) +
+            ' in ' + ', '.join(cell_modules + consumer_modules) +
+            ' (constructing modules and importers of their factory)'
             '; the polyfill is written against the old ABI')
     if unknown_native:
         raise DriftError(

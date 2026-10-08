@@ -370,6 +370,61 @@ class NativeAbiCheckTests(unittest.TestCase):
         with self.assertRaisesRegex(self.module.DriftError, "uris"):
             self.module.analyze(self.graph([("/$bunfs/root/chunk-ink.js", src)]))
 
+    # 2.1.294 layout: the constructor sits alone in a shared chunk exporting a
+    # factory, and the Ink chunk that calls the native members imports it.
+    SPLIT_FACTORY = (
+        b'function TRn(e,n){if(typeof Bun.ant?.CellSegmenter!=="function")throw Error("x");'
+        b"return new Bun.ant.CellSegmenter({substitute:e,screen:n})}var lvt=16384;export{lvt,TRn};"
+    )
+    SPLIT_INK = (
+        b'import{lvt,TRn}from"/$bunfs/root/chunk-factory.js";'
+        b"class _d{native=TRn(a,b);a=this.native.graphemes;b=this.native.sgrKeys;"
+        b"c=this.native.sgrCloseKeys;d=this.native.uris;"
+        b"e(){this.native.segment(1,2,3);this.native.paint(1,2,3)}f(){L0.setCell(1,2,3)}}"
+    )
+
+    def test_follows_constructor_hoisted_into_a_shared_chunk(self):
+        report = self.module.analyze(self.graph([
+            ("/$bunfs/root/chunk-factory.js", self.SPLIT_FACTORY),
+            ("/$bunfs/root/chunk-ink.js", self.SPLIT_INK),
+        ]))
+        self.assertEqual(report["modules"], ["/$bunfs/root/chunk-factory.js"])
+        self.assertEqual(report["consumer_modules"], ["/$bunfs/root/chunk-ink.js"])
+        self.assertEqual(report["native_members"],
+                         ["graphemes", "paint", "segment", "sgrCloseKeys", "sgrKeys", "uris"])
+        self.assertTrue(report["set_cell"])
+
+    def test_rejects_new_native_member_in_an_importing_chunk(self):
+        ink = self.SPLIT_INK.replace(b"f(){", b"m(){this.native.measure()}f(){")
+        with self.assertRaisesRegex(self.module.DriftError, "measure"):
+            self.module.analyze(self.graph([
+                ("/$bunfs/root/chunk-factory.js", self.SPLIT_FACTORY),
+                ("/$bunfs/root/chunk-ink.js", ink),
+            ]))
+
+    def test_ignores_modules_that_import_only_the_shared_constants(self):
+        # In 2.1.294 ~350 modules import the factory chunk for its constants,
+        # and the graph has an unrelated `.native.test`. Matching on the chunk
+        # path instead of the factory would scan all of them and invite a
+        # false drift.
+        report = self.module.analyze(self.graph([
+            ("/$bunfs/root/chunk-factory.js", self.SPLIT_FACTORY),
+            ("/$bunfs/root/chunk-ink.js", self.SPLIT_INK),
+            ("/$bunfs/root/chunk-other.js",
+             b'import{lvt}from"/$bunfs/root/chunk-factory.js";x.native.test(lvt)'),
+        ]))
+        self.assertEqual(report["consumer_modules"], ["/$bunfs/root/chunk-ink.js"])
+        self.assertNotIn("test", report["native_members"])
+
+    def test_follows_a_renamed_factory_export(self):
+        factory = self.SPLIT_FACTORY.replace(b"export{lvt,TRn}", b"export{lvt,TRn as Mk}")
+        ink = self.SPLIT_INK.replace(b"import{lvt,TRn}", b"import{lvt,Mk as TRn}")
+        report = self.module.analyze(self.graph([
+            ("/$bunfs/root/chunk-factory.js", factory),
+            ("/$bunfs/root/chunk-ink.js", ink),
+        ]))
+        self.assertEqual(report["consumer_modules"], ["/$bunfs/root/chunk-ink.js"])
+
 
 class UpdateEntryPointTests(unittest.TestCase):
     def run_make_update(self, install_dir):
