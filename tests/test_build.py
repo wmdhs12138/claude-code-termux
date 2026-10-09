@@ -27,7 +27,7 @@ class BuildScriptTests(unittest.TestCase):
             cache = root / "cache" / "bun-bases"
             args = [
                 "bash", str(ENSURE_BUN), str(cache), archive.as_uri(),
-                archive_sha, binary_sha, str(ROOT / "scripts" / "compact-progress.py"),
+                archive_sha, binary_sha,
             ]
             first = subprocess.run(args, text=True, capture_output=True)
             archive.unlink()
@@ -53,7 +53,7 @@ class BuildScriptTests(unittest.TestCase):
             proc = subprocess.run(
                 [
                     "bash", str(ENSURE_BUN), str(cache), "https://invalid.invalid/bun.zip",
-                    "a" * 64, binary_sha, str(ROOT / "scripts" / "compact-progress.py"),
+                    "a" * 64, binary_sha,
                 ],
                 text=True,
                 capture_output=True,
@@ -64,13 +64,77 @@ class BuildScriptTests(unittest.TestCase):
             self.assertEqual(target.read_bytes(), payload)
             self.assertIn("(migrated)", proc.stderr)
 
-    def test_large_downloads_use_single_line_bar_only_in_terminals(self):
-        for source in (FETCH.read_text(), BUILD.read_text()):
-            self.assertIn('if [ -t 2 ]; then', source)
-            self.assertIn('--progress-bar', source)
-            self.assertIn('scripts/compact-progress.py', source)
-            self.assertIn('curl -fsSL', source)
-            self.assertIn('--show-error', source)
+    def test_every_download_goes_through_one_helper(self):
+        for path in (FETCH, BUILD, ENSURE_BUN):
+            source = path.read_text()
+            self.assertIn("scripts/download.sh", source.replace('"$HERE/download.sh"', "scripts/download.sh"))
+            self.assertNotIn("--progress-bar", source)
+
+    def run_download(self, tmp, *args, tty=False, progress_fd=False):
+        """download.sh with a fake curl that records its arguments and prints a
+        curl-style progress stream."""
+        tmp = Path(tmp)
+        fake = tmp / "bin"
+        fake.mkdir(exist_ok=True)
+        (fake / "curl").write_text(
+            "#!/bin/sh\n"
+            f'echo "$*" > "{tmp}/curl-args"\n'
+            'while [ $# -gt 0 ]; do [ "$1" = -o ] && out="$2"; shift; done\n'
+            'printf "payload" > "$out"\n'
+            'case "$(cat "%s/curl-args")" in *--progress-bar*) '
+            'printf "  10.0%%%%\\r  60.0%%%%\\r 100.0%%%%\\r" >&2 ;; esac\n' % tmp
+        )
+        (fake / "curl").chmod(0o755)
+        env = dict(os.environ, PATH=f"{fake}:{os.environ['PATH']}")
+        cmd = ["bash", str(ROOT / "scripts" / "download.sh"), *args]
+        if not tty:
+            proc = subprocess.run(cmd, env=env, capture_output=True)
+            return proc.returncode, (tmp / "curl-args").read_text(), proc.stderr
+        import pty
+        master, slave = pty.openpty()
+        if progress_fd:
+            # The caller logs stderr and hands the terminal over as fd 3.
+            env["CLAUDE_CODE_TERMUX_PROGRESS_FD"] = "3"
+            cmd = ["bash", "-c", 'exec 3<>"$1"; shift; exec "$@"', "_", os.ttyname(slave), *cmd]
+            proc = subprocess.run(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        else:
+            proc = subprocess.run(cmd, env=env, stdout=subprocess.PIPE, stderr=slave)
+        os.close(slave)
+        shown = b""
+        while True:
+            try:
+                chunk = os.read(master, 4096)
+            except OSError:
+                break
+            if not chunk:
+                break
+            shown += chunk
+        os.close(master)
+        return proc.returncode, (tmp / "curl-args").read_text(), shown
+
+    def test_download_is_quiet_without_a_terminal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, args, stderr = self.run_download(tmp, "--resume", "https://x/y", f"{tmp}/out", "  Label")
+        self.assertEqual(rc, 0)
+        self.assertIn("-fsSL", args)
+        self.assertIn("-C -", args)
+        self.assertEqual(stderr, b"")
+
+    def test_download_draws_one_labelled_bar_on_a_terminal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, args, shown = self.run_download(tmp, "https://x/y", f"{tmp}/out", "  Downloading x",
+                                                tty=True)
+        self.assertEqual(rc, 0)
+        self.assertIn("--progress-bar", args)
+        self.assertIn(b"\r  Downloading x [", shown)
+        self.assertIn(b"100%", shown)
+
+    def test_download_draws_on_the_progress_fd_when_the_caller_logs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, _, shown = self.run_download(tmp, "https://x/y", f"{tmp}/out", "  Downloading x",
+                                             tty=True, progress_fd=True)
+        self.assertEqual(rc, 0)
+        self.assertIn(b"  Downloading x [", shown)
 
     def test_compact_progress_throttles_updates_and_preserves_errors(self):
         payload = b"0.1%\r0.9%\r4.9%\r5.0%\r5.4%\r10.0%\r100.0%\rcurl: (22) test error\n"
@@ -83,6 +147,13 @@ class BuildScriptTests(unittest.TestCase):
         self.assertEqual(proc.stderr.count(b"\r["), 4)
         self.assertIn(b"100%", proc.stderr)
         self.assertIn(b"curl: (22) test error", proc.stderr)
+
+    def test_compact_progress_labels_the_bar(self):
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "compact-progress.py"), "  Downloading x"],
+            input=b"50.0%\r100.0%\r", capture_output=True,
+        )
+        self.assertIn(b"\r  Downloading x [##########..........]  50%", proc.stderr)
 
     def test_fetch_rejects_non_semver_before_network(self):
         with tempfile.TemporaryDirectory() as tmp:

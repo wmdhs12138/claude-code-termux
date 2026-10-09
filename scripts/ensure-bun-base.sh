@@ -7,7 +7,7 @@ CACHE_ROOT="${1:?shared cache directory required}"
 BUN_URL="${2:?Bun URL required}"
 ARCHIVE_SHA="${3:?archive sha256 required}"
 BINARY_SHA="${4:?binary sha256 required}"
-PROGRESS_HELPER="${5:?progress helper required}"
+HERE="$(cd "$(dirname "$0")" && pwd)"
 
 for pair in "archive:$ARCHIVE_SHA" "binary:$BINARY_SHA"; do
   name="${pair%%:*}"
@@ -60,12 +60,7 @@ done
 
 echo "build: downloading new Android Bun base ${BINARY_SHA:0:12}..." >&2
 ARCHIVE="$STAGE/bun.zip"
-if [ -t 2 ]; then
-  curl -fL --show-error --progress-bar --retry 3 -o "$ARCHIVE" "$BUN_URL" \
-    2>&1 | python3 "$PROGRESS_HELPER"
-else
-  curl -fsSL --retry 3 -o "$ARCHIVE" "$BUN_URL"
-fi
+bash "$HERE/download.sh" "$BUN_URL" "$ARCHIVE" "  Downloading the Bun base"
 ACTUAL_ARCHIVE_SHA="$(sha256sum "$ARCHIVE" | cut -d' ' -f1)"
 if [ "$ACTUAL_ARCHIVE_SHA" != "$ARCHIVE_SHA" ]; then
   echo "bun-base: archive checksum mismatch (got $ACTUAL_ARCHIVE_SHA)" >&2

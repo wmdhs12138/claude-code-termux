@@ -197,55 +197,150 @@ class SelfUpdateTests(unittest.TestCase):
             rejected = validate({**manifest, **edit})
             self.assertNotEqual(rejected.returncode, 0)
 
-    def run_check(self, tmp, installed_version, release_tag, approved_version, same_binary):
-        """`claude update --check` against a fake GitHub (curl on PATH)."""
+    def fake_github(self, tmp, release_tag, manifest_doc, build_script=None):
+        """PATH entries that stand in for GitHub: releases/latest, the release
+        manifest, `git ls-remote` and a toolchain tarball with `build_script`
+        as its scripts/build.sh."""
         tmp = Path(tmp)
-        target = tmp / "claude"
-        target.write_text(f'#!/bin/sh\necho "{installed_version} (Claude Code)"\n')
-        target.chmod(0o755)
-        digest = hashlib.sha256(target.read_bytes()).hexdigest()
         manifest = tmp / "manifest.json"
-        manifest.write_text(json.dumps({
-            "claude": approved_version,
+        manifest.write_text(json.dumps(manifest_doc))
+        commit = "e" * 40
+        tarball = tmp / "toolchain.tar.gz"
+        if build_script is not None:
+            tree = tmp / "tree" / f"claude-code-termux-{commit}"
+            (tree / "scripts").mkdir(parents=True)
+            (tree / "scripts" / "build.sh").write_text(build_script)
+            subprocess.run(["tar", "-czf", str(tarball), "-C", str(tmp / "tree"), tree.name],
+                           check=True)
+        fake_bin = tmp / "bin"
+        fake_bin.mkdir()
+        release = f"https://github.com/wmdhs12138/claude-code-termux/releases/tag/{release_tag}"
+        (fake_bin / "curl").write_text(f"""#!/bin/sh
+case "$*" in
+  *url_effective*) printf %s "{release}" ;;
+  */archive/*)
+    while [ $# -gt 0 ]; do [ "$1" = -o ] && out="$2"; shift; done
+    cp "{tarball}" "$out" ;;
+  *) cat "{manifest}" ;;
+esac
+""")
+        (fake_bin / "git").write_text(
+            f'#!/bin/sh\nprintf "%s\\trefs/tags/%s\\n" "{commit}" "{release_tag}"\n')
+        for tool in ("curl", "git"):
+            (fake_bin / tool).chmod(0o755)
+        return dict(os.environ, PATH=f"{fake_bin}:{os.environ['PATH']}")
+
+    @staticmethod
+    def fake_claude(path, version):
+        path.write_text(f'#!/bin/sh\necho "{version} (Claude Code)"\n')
+        path.chmod(0o755)
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    @staticmethod
+    def manifest(version, output_sha):
+        return {
+            "claude": version,
             "claude_linux_arm64_sha256": "a" * 64,
             "base_bun": {"archive_sha256": "b" * 64, "binary_sha256": "c" * 64},
-            "output_sha256": digest if same_binary else "d" * 64,
+            "output_sha256": output_sha,
             "tui_smoke": {"ran": True, "result": "pass"},
             "ci_acceptance": {"runtime": "termux-docker/bionic", "architecture": "aarch64",
                               "version_probe": "pass", "tui_smoke": "pass"},
-        }))
-        fake_bin = tmp / "bin"
-        fake_bin.mkdir()
-        curl = fake_bin / "curl"
-        release = f"https://github.com/wmdhs12138/claude-code-termux/releases/tag/{release_tag}"
-        curl.write_text(
-            "#!/bin/sh\n"
-            f'case "$*" in *url_effective*) printf %s "{release}" ;; *) cat "{manifest}" ;; esac\n'
-        )
-        curl.chmod(0o755)
-        env = dict(os.environ, PATH=f"{fake_bin}:{os.environ['PATH']}")
+        }
+
+    def run_check(self, tmp, installed_version, release_tag, approved_version, same_binary):
+        """`claude update --check` against a fake GitHub."""
+        tmp = Path(tmp)
+        target = tmp / "claude"
+        digest = self.fake_claude(target, installed_version)
+        env = self.fake_github(tmp, release_tag, self.manifest(
+            approved_version, digest if same_binary else "d" * 64))
         proc = subprocess.run(
             ["bash", str(SELF_UPDATE), str(target), "0", "1", str(tmp / "cache")],
             text=True, capture_output=True, env=env,
         )
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertFalse((tmp / "cache").exists(), "--check must not create the cache")
+        self.assertEqual(proc.stderr, "")
+        self.assertEqual(len(proc.stdout.splitlines()), 1, proc.stdout)
         return proc.stdout
 
     def test_check_decides_by_binary_hash(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = self.run_check(tmp, "1.2.3", "v1.2.3", "1.2.3", same_binary=True)
-        self.assertIn("Claude Code is up to date", out)
+        self.assertEqual(out, "Claude Code 1.2.3 is up to date (v1.2.3)\n")
         # Same version, different bytes: a re-cut with a newer toolchain.
         with tempfile.TemporaryDirectory() as tmp:
             out = self.run_check(tmp, "1.2.3", "v1.2.3-r1", "1.2.3", same_binary=False)
-        self.assertIn("update available (v1.2.3-r1 is a different build of 1.2.3)", out)
+        self.assertIn("Update available: v1.2.3-r1 is a different build of Claude Code 1.2.3", out)
         with tempfile.TemporaryDirectory() as tmp:
             out = self.run_check(tmp, "1.2.3", "v1.2.4", "1.2.4", same_binary=False)
-        self.assertIn("Claude Code update available", out)
+        self.assertIn("Update available: Claude Code 1.2.3 → 1.2.4 (v1.2.4)", out)
         with tempfile.TemporaryDirectory() as tmp:
             out = self.run_check(tmp, "1.2.5", "v1.2.4", "1.2.4", same_binary=False)
-        self.assertIn("newer than the latest approved Release", out)
+        self.assertIn("1.2.5 is newer than the latest approved release 1.2.4", out)
+
+    # A toolchain whose build is as chatty as the real one. It writes the new
+    # binary and a manifest whose output hash matches, like a reproducible build.
+    NOISY_BUILD = """set -e
+echo "build: graph extracted (166794458 bytes)"
+echo "build: native-abi: CellSegmenter ok" >&2
+printf '{"payload_vaddr": 1}\\n'
+if [ -n "${CLAUDE_CODE_TERMUX_PROGRESS_FD:-}" ]; then
+  echo "  Building and verifying..." >&"$CLAUDE_CODE_TERMUX_PROGRESS_FD"
+fi
+mkdir -p dist
+printf '#!/bin/sh\\necho "1.2.4 (Claude Code)"\\n' > dist/claude
+chmod +x dist/claude
+sha="$(sha256sum dist/claude | cut -d' ' -f1)"
+cat > dist/build-manifest.json <<EOF
+{"claude": "1.2.4", "claude_linux_arm64_sha256": "$(printf 'a%.0s' $(seq 64))",
+ "base_bun": {"archive_sha256": "$(printf 'b%.0s' $(seq 64))",
+              "binary_sha256": "$(printf 'c%.0s' $(seq 64))"},
+ "output_sha256": "$sha", "tui_smoke": {"ran": true, "result": "pass"}}
+EOF
+echo "build: OK claude=1.2.4 -> $PWD/dist/claude"
+"""
+
+    def run_update(self, tmp, build_script):
+        tmp = Path(tmp)
+        target = tmp / "claude"
+        self.fake_claude(target, "1.2.3")
+        new_sha = self.fake_claude(tmp / "expected", "1.2.4")
+        env = self.fake_github(tmp, "v1.2.4", self.manifest("1.2.4", new_sha), build_script)
+        env["TMPDIR"] = str(tmp)
+        proc = subprocess.run(
+            ["bash", str(SELF_UPDATE), str(target), "0", "0", str(tmp / "cache")],
+            text=True, capture_output=True, env=env,
+        )
+        log = tmp / "cache" / "claude-code-termux" / "self-update" / "update.log"
+        return proc, target.read_text(), log.read_text() if log.exists() else ""
+
+    def test_update_shows_progress_and_logs_the_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc, target, log = self.run_update(tmp, self.NOISY_BUILD)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        lines = proc.stdout.splitlines()
+        self.assertEqual(lines[0], "Updating Claude Code 1.2.3 → 1.2.4 (v1.2.4)")
+        self.assertRegex(lines[1], r"^Updated Claude Code 1\.2\.3 → 1\.2\.4 in \d+ s$")
+        self.assertEqual(len(lines), 2, proc.stdout)
+        self.assertEqual(proc.stderr, "  Building and verifying...\n")
+        self.assertIn("1.2.4", target)
+        for noise in ("graph extracted", "native-abi", "payload_vaddr", "build: OK"):
+            self.assertIn(noise, log)
+
+    def test_failed_update_explains_and_keeps_the_binary(self):
+        failing = "echo 'build: graph extracted'\necho 'build: native-abi: DRIFT: new member' >&2\nexit 1\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            proc, target, log = self.run_update(tmp, failing)
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(proc.stdout, "Updating Claude Code 1.2.3 → 1.2.4 (v1.2.4)\n")
+        self.assertIn("claude update: the build failed; the installed Claude Code is unchanged",
+                      proc.stderr)
+        self.assertIn("update.log:", proc.stderr)
+        self.assertIn("    build: native-abi: DRIFT: new member", proc.stderr)
+        self.assertIn("1.2.3", target)
+        self.assertIn("DRIFT", log)
 
     def test_self_update_uses_termux_tmp_and_only_persists_bun(self):
         source = SELF_UPDATE.read_text()

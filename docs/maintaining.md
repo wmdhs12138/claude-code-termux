@@ -72,6 +72,8 @@ REFRESH_BASE=1 BUN_URL=<候选 zip 的 URL> scripts/build.sh latest
 - 产物 `dist/claude` 和 `dist/build-manifest.json`，清单字段 `claude`、`claude_linux_arm64_sha256`、
   `base_bun.archive_sha256`、`base_bun.binary_sha256`、`tui_smoke.ran`、`tui_smoke.result`；
 - `bash install.sh --no-build`；
+- 环境变量 `CLAUDE_CODE_TERMUX_PROGRESS_FD`：更新器靠它把下载进度留在终端。不认识它的旧工具链也能正常构建，
+  只是更新时终端上没有进度；
 - `scripts/update.sh`：早期的 shell launcher 会调用它，现在只是一个提示迁移的存根，不能删。
 
 2026-10 之前装的版本还会去找 `toolchain-vN-*` tag：只有当某个工具链 tag 的清单对应同一份官方二进制时才改用它，

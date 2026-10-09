@@ -48,12 +48,8 @@ if [ -f "$OUT" ] && [ "$(stat -c%s "$OUT")" = "$SIZE" ] \
   echo "fetch-claude: cached $OUT" >&2
 else
   echo "fetch-claude: downloading $VERSION ($SIZE bytes)..." >&2
-  if [ -t 2 ]; then
-    curl -fL --show-error --progress-bar --retry 3 -C - -o "$OUT" \
-      "$BASE/$VERSION/linux-arm64/claude" 2>&1 | python3 "$ROOT/scripts/compact-progress.py"
-  else
-    curl -fsSL --retry 3 -C - -o "$OUT" "$BASE/$VERSION/linux-arm64/claude"
-  fi
+  bash "$ROOT/scripts/download.sh" --resume "$BASE/$VERSION/linux-arm64/claude" "$OUT" \
+    "  Downloading Claude Code ($((SIZE / 1048576)) MiB)"
   ACTUAL="$(sha256sum "$OUT" | cut -d' ' -f1)"
   if [ "$ACTUAL" != "$CHECKSUM" ]; then
     echo "fetch-claude: checksum mismatch (got $ACTUAL)" >&2

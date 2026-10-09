@@ -48,6 +48,9 @@ CI 验收过的 Release：在临时目录用该 Release 对应的源码构建，
 所以同一 Claude 版本因工具链更新重新发布的 `vX.Y.Z-rN` 也能识别。上游刚发布、还没通过 CI 的版本不会出现，
 CI 每天检查一次。
 
+终端上只显示进度，构建细节写在 `~/.cache/claude-code-termux/self-update/update.log`；失败时会显示原因和
+日志的最后几行。
+
 ## 功能一览
 
 | 功能 | 状态 |

@@ -18,6 +18,9 @@
 #   SKIP_RUN=1           structural build only, where an aarch64 Bionic binary
 #                        cannot execute (no version probe, no TUI smoke)
 #   SMOKE_SECONDS=N      TUI smoke observation window (default 7)
+#   CLAUDE_CODE_TERMUX_PROGRESS_FD=N
+#                        the caller logs this script's output and wants only
+#                        progress on fd N: download bars and one status line
 #
 # Contract: `claude update` (runtime/self-update.sh) and
 # scripts/install-approved.sh run this script from a downloaded toolchain tag,
@@ -85,6 +88,13 @@ trap cleanup EXIT
 # Child fetches share this lock rather than trying to acquire it again.
 export CLAUDE_CODE_TERMUX_LOCK_HELD=1
 
+# One line for whoever watches the terminal while the details go to a log.
+progress() {
+  if [ -n "${CLAUDE_CODE_TERMUX_PROGRESS_FD:-}" ]; then
+    echo "$1" >&"$CLAUDE_CODE_TERMUX_PROGRESS_FD"
+  fi
+}
+
 fail_before_promote() {
   echo "build: $1" >&2
   echo "build: $DIST/claude and its manifest were left unchanged" >&2
@@ -114,12 +124,7 @@ CLAUDE_SHA="$(sha256sum "$CLAUDE_BIN" | cut -d' ' -f1)"
 if [ "$REFRESH_BASE" = "1" ]; then
   REFRESH_STAGE="$(mktemp -d "$WORK/.bun-refresh.XXXXXX")"
   echo "build: downloading candidate Bun base $BUN_URL" >&2
-  if [ -t 2 ]; then
-    curl -fL --show-error --progress-bar --retry 3 -o "$REFRESH_STAGE/bun.zip" "$BUN_URL" \
-      2>&1 | python3 "$ROOT/scripts/compact-progress.py"
-  else
-    curl -fsSL --retry 3 -o "$REFRESH_STAGE/bun.zip" "$BUN_URL"
-  fi
+  bash "$ROOT/scripts/download.sh" "$BUN_URL" "$REFRESH_STAGE/bun.zip" "  Downloading the candidate Bun base"
   unzip -o -j "$REFRESH_STAGE/bun.zip" "*/bun" -d "$REFRESH_STAGE" >/dev/null
   BUN_ARCHIVE_SHA="$(sha256sum "$REFRESH_STAGE/bun.zip" | cut -d' ' -f1)"
   BUN_SHA="$(sha256sum "$REFRESH_STAGE/bun" | cut -d' ' -f1)"
@@ -133,7 +138,7 @@ else
   BUN_SOURCE="$BUN_URL"
 fi
 if ! BUN="$(bash "$ROOT/scripts/ensure-bun-base.sh" "$BUN_CACHE" "$BUN_SOURCE" \
-            "$BUN_ARCHIVE_SHA" "$BUN_SHA" "$ROOT/scripts/compact-progress.py")"; then
+            "$BUN_ARCHIVE_SHA" "$BUN_SHA")"; then
   fail_before_promote "could not provide the Bun base pinned in versions.json; to accept a different base run REFRESH_BASE=1 BUN_URL=<zip> scripts/build.sh"
 fi
 if [ "${SKIP_RUN:-0}" = "1" ]; then
@@ -157,6 +162,8 @@ PY
 else
   BUN_VER="$("$BUN" --revision 2>/dev/null || "$BUN" --version)"
 fi
+
+progress "  Building and verifying..."
 
 # 3. extract the standalone module graph ([u64 len][graph][Offsets32][trailer])
 GRAPH="$WORK/claude-graph.bin"
@@ -202,7 +209,9 @@ echo "build: grafted ($(stat -c%s "$CANDIDATE") bytes, staged)" >&2
 #    -> trailer -> module table) and runs everywhere, including the x64 CI
 #    runner, which cannot execute an aarch64 bionic binary at all. The exec
 #    check runs only where the artifact can actually run.
-python3 "$ROOT/tools/verify_graft.py" "$CANDIDATE" "$(stat -c%s "$GRAPH_ADAPTED")" | tee "$WORK/verify-graft.json"
+python3 "$ROOT/tools/verify_graft.py" "$CANDIDATE" "$(stat -c%s "$GRAPH_ADAPTED")" > "$WORK/verify-graft.json"
+GRAFT_SUMMARY="$(python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); print(d["modules"], "modules, entry", d["entry_point"])' "$WORK/verify-graft.json")"
+echo "build: graft verified ($GRAFT_SUMMARY)" >&2
 if [ "${SKIP_RUN:-0}" = "1" ]; then
   OUT_VER="$VER (not executed; SKIP_RUN=1)"
 else

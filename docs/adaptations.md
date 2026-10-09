@@ -54,6 +54,21 @@ Bionic 嫁接产物没有 prelude，普通 CLI 收到 `-G` 就报 `error: unknow
 4. 构建得到的输入哈希（官方二进制、Bun 压缩包、Bun 二进制）和输出哈希都必须和获准的清单相同，版本号也要
    对上，才原子替换当前可执行文件。构建是可复现的：同一个 tag 在手机上和在 CI 里得到逐字节相同的二进制。
 
+终端上只有一行标题、下载进度条、一行「Building and verifying...」和一行结果，例如：
+
+```text
+Updating Claude Code 2.1.295 → 2.1.296 (v2.1.296)
+  Downloading Claude Code (244 MiB) [####################] 100%
+  Building and verifying...
+Updated Claude Code 2.1.295 → 2.1.296 in 1 min 12 s
+```
+
+其余输出（构建的每一步、缓存清理）写进 `~/.cache/claude-code-termux/self-update/update.log`，每次更新覆盖。
+做法是更新器把构建的 stdout/stderr 重定向到日志，同时把终端作为 fd 3 交给它，并设置
+`CLAUDE_CODE_TERMUX_PROGRESS_FD=3`；`scripts/download.sh` 把进度条画在这个 fd 上，`build.sh` 在开始构建时往上面
+写一行状态。进度条会按终端宽度缩短或截断标签，保证不折行（折行之后 `\r` 无法原地重绘）。失败时更新器给出
+原因、日志的最后 8 行和日志路径。
+
 ### 跨会话消息为什么需要 peer 凭据
 
 普通的 `SendMessage` 不需要。需要的是带「期望对端 pid」的发送：`notify_when_idle` 订阅、artifact 回复的让渡与
