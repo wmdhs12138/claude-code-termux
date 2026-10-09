@@ -45,13 +45,14 @@ Bionic 嫁接产物没有 prelude，普通 CLI 收到 `-G` 就报 `error: unknow
 
 `self-update.sh` 是一个普通的 shell 文件，可以单独运行（`bash runtime/self-update.sh TARGET 0 1 ~/.cache`）。流程：
 
-1. 查询本项目 `releases/latest`，下载它的 `build-manifest.json`，要求其中记录了 termux-docker Bionic 上的
-   版本探针和 TUI 冒烟都通过。
-2. 如果有更新的工具链 tag（`toolchain-vN-<指纹>`），并且它的清单对应同一份官方二进制，就改用这个工具链。
-3. 下载该 tag 对应提交的源码包，在 `$TMPDIR` 里运行 `scripts/build.sh`；Bun 底座放在
+1. 查询本项目 `releases/latest`（`vX.Y.Z` 或 `vX.Y.Z-rN`），下载它的 `build-manifest.json`，要求其中记录了
+   termux-docker Bionic 上的版本探针和 TUI 冒烟都通过。
+2. 当前可执行文件的 SHA-256 等于清单里的 `output_sha256` 就是最新；否则版本更高时提示「比已验收的更新」，
+   其余情况（新版本，或同一版本的 `-rN` 重新发布）都需要更新。`--check` 到此为止，不创建任何文件。
+3. 下载该 tag 指向的提交的源码包，在 `$TMPDIR` 里运行 `scripts/build.sh`；Bun 底座放在
    `~/.cache/claude-code-termux/self-update/bun-bases/`，按哈希寻址，跨版本共用。
-4. 构建得到的输入哈希（官方二进制、Bun 压缩包、Bun 二进制）必须和获准的清单逐一相同，版本号也要对上，
-   才原子替换当前可执行文件。`--check` 在创建任何文件之前就退出。
+4. 构建得到的输入哈希（官方二进制、Bun 压缩包、Bun 二进制）和输出哈希都必须和获准的清单相同，版本号也要
+   对上，才原子替换当前可执行文件。构建是可复现的：同一个 tag 在手机上和在 CI 里得到逐字节相同的二进制。
 
 ### 跨会话消息为什么需要 peer 凭据
 

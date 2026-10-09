@@ -39,12 +39,14 @@ Release，在 Termux 临时目录构建、验证，并原子安装到 `$PREFIX/b
 ```bash
 claude update --check   # 查看最新已验收版本，不修改文件
 claude update           # 有已验收的新版时构建并替换
-claude update --force   # 用已验收的最新工具链重新构建
+claude update --force   # 重新构建已验收的最新 Release
 ```
 
 不会调用官方更新器，因为它下载的是不能在 Termux 运行的 glibc 版本。`claude update` 只采用本项目
-CI 验收过的 Release：在临时目录用对应的工具链构建，核对官方输入哈希、版本和 TUI 结果后才原子替换；
-任何一步失败，原有的 `claude` 都保持不变。上游刚发布、还没通过 CI 的版本不会出现，CI 每天检查一次。
+CI 验收过的 Release：在临时目录用该 Release 对应的源码构建，构建是可复现的，得到的二进制必须和 CI
+验收的那个哈希一致才原子替换；任何一步失败，原有的 `claude` 都保持不变。是否最新按二进制哈希判断，
+所以同一 Claude 版本因工具链更新重新发布的 `vX.Y.Z-rN` 也能识别。上游刚发布、还没通过 CI 的版本不会出现，
+CI 每天检查一次。
 
 ## 功能一览
 

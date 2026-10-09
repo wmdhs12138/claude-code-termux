@@ -10,34 +10,35 @@ linker、AOSP 库和 Termux 的文件系统布局。镜像按 OCI digest 固定�
 ## 任务
 
 ```text
-resolve ── 决定 Claude 版本，判断它是否已经发布过
+resolve ── 决定 Claude 版本和发布 tag（vX.Y.Z，手动重新发布时是 vX.Y.Z-rN），判断有没有新东西要发
 tests ──── python3 -m unittest discover -s tests（x64 Ubuntu，几秒）
 bionic ─── ubuntu-24.04-arm + 固定的 termux-docker 镜像：
    │       升级 Termux 并安装依赖 → scripts/build.sh（下载校验、提取、ABI 检查、改图、
    │       嵌入 runtime/、嫁接、版本探针、PTY 里渲染真实 TUI）→ 在清单里写入 ci_acceptance
-release ── 唯一有写权限的任务：发布工具链 Release 和 Claude Release，只附文本凭证
+release ── 唯一有写权限的任务：发布 Release，只附文本凭证
 ```
 
 | 触发 | 做什么 |
 | --- | --- |
-| 推送到 `main` | 测试和完整的 Bionic 验收；工具链指纹变了就发布工具链 Release，Claude 版本还没发布过就发布 Claude Release |
+| 推送到 `main` | 测试和完整的 Bionic 验收；版本已经发布过就不再发布 |
 | 每天 03:00 UTC | 查询官方最新版，只有还没发布过的版本才进入 Bionic 验收，通过后自动发布 |
-| 手动运行 | 验收 `latest` 或指定版本，发布规则同推送 |
+| 手动运行 | 验收 `latest` 或指定版本；勾选 `recut` 在工具链改动后重新发布同一版本（`vX.Y.Z-rN`） |
 | PR | 只跑 `resolve` 和 `tests`，不接触 Claude 二进制 |
 
 `tests` 任务刻意不在 termux-docker 里重跑：部分测试会造出常规的 `/bin/sh`、`/usr/bin/env` 脚本，而真实的 Termux
 文件系统没有这些路径。容器只做需要 Bionic 的检查。
 
-## 两种 Release
+提交信息里带 `[skip ci]` 可以让推送不触发构建。工具链的改动不会单独发布：它们随下一个 Claude 版本一起发布，
+或者用 `gh workflow run build.yml -f version=latest -f recut=true` 立即重新发布当前版本。
 
-- **`vX.Y.Z`**：一个 Claude 版本第一次通过验收时发布，成为 Latest。发布是不可变的，被撤回的版本重发时用
-  `vX.Y.Z-rN`。
-- **`toolchain-vN-<指纹>`**：指纹由 [`scripts/fingerprint.sh`](../scripts/fingerprint.sh) 计算，覆盖
-  `install.sh`、`versions.json`、`scripts/`、`tools/`、`runtime/` 和 `.github/` 下所有受版本控制的文件。
-  没有 tag 对应当前指纹时才发布，附当次的验收清单，并且不标记为 Latest（`/releases/latest` 必须始终指向
-  Claude Release）。`claude update` 据此在同一个 Claude 版本下选用最新的、验收过的工具链。
+## Release
 
-同一个指纹在任何机器上都相同（只算受版本控制的文件），本地运行 `scripts/fingerprint.sh` 得到的就是 CI 的值。
+- tag 是 `vX.Y.Z`；同一个 Claude 版本因为工具链变化重新发布，tag 是 `vX.Y.Z-rN`（发布是不可变的，会永久占用
+  tag 名，所以被撤回的版本也只能用 `-rN` 重发）。
+- tag 用 `--target` 钉在 CI 构建它的那个提交上。`claude update` 从这个提交构建，构建是可复现的，得到的二进制
+  必须和清单里的 `output_sha256` 一致。
+- 只有最高的 Claude 版本会被标为 Latest（`claude update` 跟的就是它），重新发布旧版本不会让安装回退。
+- 发布说明列出相对上一个 Release 的工具链变更。
 
 ## 发布边界
 

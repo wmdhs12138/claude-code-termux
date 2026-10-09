@@ -135,8 +135,10 @@ class SelfUpdateTests(unittest.TestCase):
         source = SELF_UPDATE.read_text()
         self.assertIn('claude-code-termux/releases/latest', source)
         self.assertIn('releases/download/$release_tag/build-manifest.json', source)
-        self.assertIn('releases/download/$toolchain_tag/build-manifest.json', source)
+        self.assertIn('tag_ref="refs/tags/$release_tag"', source)
         self.assertIn('git ls-remote --tags https://github.com/wmdhs12138/claude-code-termux.git', source)
+        # Releases carry their own toolchain; there are no toolchain tags to follow.
+        self.assertNotIn('toolchain-v', source)
         self.assertNotIn('refs/heads/main', source)
         self.assertNotIn('claude-code-releases/latest', source)
         self.assertNotIn('api.github.com/repos/wmdhs12138/claude-code-termux/commits/main', source)
@@ -147,8 +149,8 @@ class SelfUpdateTests(unittest.TestCase):
                       (RUNTIME / "20-self-update.js").read_text())
         source = (RUNTIME / "20-self-update.js").read_text() + SELF_UPDATE.read_text()
         self.assertIn('claude-code-termux/releases/latest', source)
-        self.assertIn('source_tag="$release_tag"', source)
-        self.assertIn('built_hashes" != "$expected_hashes', source)
+        self.assertIn('tag_ref="refs/tags/$release_tag"', source)
+        self.assertIn('"$built_hashes" != "$approved_hashes"', source)
         self.assertIn('mv -f "$replacement" "$target"', source)
         self.assertIn('updateArgs.indexOf("--check")', source)
         self.assertIn('updateArgs.indexOf("--force")', source)
@@ -167,6 +169,7 @@ class SelfUpdateTests(unittest.TestCase):
             "claude": "2.1.281",
             "claude_linux_arm64_sha256": digest,
             "base_bun": {"archive_sha256": "b" * 64, "binary_sha256": "c" * 64},
+            "output_sha256": "d" * 64,
             "tui_smoke": {"ran": True, "result": "pass"},
             "ci_acceptance": {
                 "runtime": "termux-docker/bionic",
@@ -184,14 +187,65 @@ class SelfUpdateTests(unittest.TestCase):
 
         good = validate(manifest)
         self.assertEqual(good.returncode, 0, good.stderr)
-        self.assertEqual(good.stdout.strip(), f"{digest} {'b' * 64} {'c' * 64}")
+        self.assertEqual(good.stdout.strip(), f"{digest} {'b' * 64} {'c' * 64} {'d' * 64}")
         for edit in (
             {"ci_acceptance": {}},
             {"tui_smoke": {"ran": True, "result": "fail"}},
             {"claude_linux_arm64_sha256": "bad"},
+            {"output_sha256": "bad"},
         ):
             rejected = validate({**manifest, **edit})
             self.assertNotEqual(rejected.returncode, 0)
+
+    def run_check(self, tmp, installed_version, release_tag, approved_version, same_binary):
+        """`claude update --check` against a fake GitHub (curl on PATH)."""
+        tmp = Path(tmp)
+        target = tmp / "claude"
+        target.write_text(f'#!/bin/sh\necho "{installed_version} (Claude Code)"\n')
+        target.chmod(0o755)
+        digest = hashlib.sha256(target.read_bytes()).hexdigest()
+        manifest = tmp / "manifest.json"
+        manifest.write_text(json.dumps({
+            "claude": approved_version,
+            "claude_linux_arm64_sha256": "a" * 64,
+            "base_bun": {"archive_sha256": "b" * 64, "binary_sha256": "c" * 64},
+            "output_sha256": digest if same_binary else "d" * 64,
+            "tui_smoke": {"ran": True, "result": "pass"},
+            "ci_acceptance": {"runtime": "termux-docker/bionic", "architecture": "aarch64",
+                              "version_probe": "pass", "tui_smoke": "pass"},
+        }))
+        fake_bin = tmp / "bin"
+        fake_bin.mkdir()
+        curl = fake_bin / "curl"
+        release = f"https://github.com/wmdhs12138/claude-code-termux/releases/tag/{release_tag}"
+        curl.write_text(
+            "#!/bin/sh\n"
+            f'case "$*" in *url_effective*) printf %s "{release}" ;; *) cat "{manifest}" ;; esac\n'
+        )
+        curl.chmod(0o755)
+        env = dict(os.environ, PATH=f"{fake_bin}:{os.environ['PATH']}")
+        proc = subprocess.run(
+            ["bash", str(SELF_UPDATE), str(target), "0", "1", str(tmp / "cache")],
+            text=True, capture_output=True, env=env,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertFalse((tmp / "cache").exists(), "--check must not create the cache")
+        return proc.stdout
+
+    def test_check_decides_by_binary_hash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = self.run_check(tmp, "1.2.3", "v1.2.3", "1.2.3", same_binary=True)
+        self.assertIn("Claude Code is up to date", out)
+        # Same version, different bytes: a re-cut with a newer toolchain.
+        with tempfile.TemporaryDirectory() as tmp:
+            out = self.run_check(tmp, "1.2.3", "v1.2.3-r1", "1.2.3", same_binary=False)
+        self.assertIn("update available (v1.2.3-r1 is a different build of 1.2.3)", out)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = self.run_check(tmp, "1.2.3", "v1.2.4", "1.2.4", same_binary=False)
+        self.assertIn("Claude Code update available", out)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = self.run_check(tmp, "1.2.5", "v1.2.4", "1.2.4", same_binary=False)
+        self.assertIn("newer than the latest approved Release", out)
 
     def test_self_update_uses_termux_tmp_and_only_persists_bun(self):
         source = SELF_UPDATE.read_text()

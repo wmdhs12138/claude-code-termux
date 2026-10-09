@@ -3,10 +3,16 @@ name: build
 # The proprietary Claude binary exists only in the read-only Bionic build job.
 # Only explicitly named text reports cross into the write-enabled release job:
 #
+#   resolve -- picks the Claude version and the release tag (vX.Y.Z, or
+#              vX.Y.Z-rN for a manual re-cut after toolchain changes) and
+#              decides whether anything new needs to be released.
 #   tests   -- x64 regression tests; pull requests stop here.
 #   bionic  -- ARM64 runner + pinned termux-docker. Builds, directly executes
 #              and renders the Bionic artifact; contents remain read-only.
 #   release -- downloads the text reports and publishes credentials only.
+#
+# Toolchain changes are not released on their own: they ship with the next
+# Claude version, or now via workflow_dispatch with recut=true. See docs/ci.md.
 #
 # dist/claude is a modified copy of Anthropic's proprietary Claude Code and
 # must not be redistributed. The release job refuses any asset over 1 MiB,
@@ -23,6 +29,11 @@ on:
         required: true
         default: latest
         type: string
+      recut:
+        description: Re-release an already released version (toolchain changed)
+        required: false
+        default: false
+        type: boolean
   schedule:
     - cron: "0 3 * * *"
 
@@ -38,6 +49,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
       unreleased: ${{ steps.version.outputs.unreleased }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -49,6 +61,7 @@ jobs:
         id: version
         env:
           REQUESTED: ${{ github.event_name == 'workflow_dispatch' && inputs.version || 'latest' }}
+          RECUT: ${{ github.event_name == 'workflow_dispatch' && inputs.recut || 'false' }}
         run: |
           set -euo pipefail
           if [ "$REQUESTED" = latest ]; then
@@ -61,12 +74,23 @@ jobs:
             exit 1
           fi
           echo "version=$V" >> "$GITHUB_OUTPUT"
-          # An immutable release reserves its tag name forever: a yanked version
-          # comes back as v$V-rN, so both forms count as released.
-          if git tag -l | grep -qE "^v$V(-r[0-9]+)?$"; then
-            echo "unreleased=false" >> "$GITHUB_OUTPUT"
-            echo "v$V already has a release"
+          # An immutable release reserves its tag name forever, so a re-cut
+          # (or a yanked release) becomes v$V-rN; both forms count as released.
+          TAGS="$(git tag -l)"
+          if grep -qE "^v$V(-r[0-9]+)?$" <<<"$TAGS"; then
+            if [ "$RECUT" = true ]; then
+              N=1
+              while grep -qx "v$V-r$N" <<<"$TAGS"; do N=$((N+1)); done
+              echo "tag=v$V-r$N" >> "$GITHUB_OUTPUT"
+              echo "unreleased=true" >> "$GITHUB_OUTPUT"
+              echo "re-cutting v$V as v$V-r$N"
+            else
+              echo "tag=v$V" >> "$GITHUB_OUTPUT"
+              echo "unreleased=false" >> "$GITHUB_OUTPUT"
+              echo "v$V already has a release"
+            fi
           else
+            echo "tag=v$V" >> "$GITHUB_OUTPUT"
             echo "unreleased=true" >> "$GITHUB_OUTPUT"
             echo "v$V is unreleased"
           fi
@@ -147,6 +171,7 @@ jobs:
 
   release:
     needs: [resolve, bionic]
+    if: needs.resolve.outputs.unreleased == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -154,7 +179,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       VERSION: ${{ needs.resolve.outputs.version }}
-      UNRELEASED: ${{ needs.resolve.outputs.unreleased }}
+      TAG: ${{ needs.resolve.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -165,70 +190,12 @@ jobs:
           name: build-reports
           path: reports
 
-      - name: Cut toolchain release if the toolchain changed
-        id: toolchain
+      - name: Publish release
         run: |
           set -euo pipefail
-
-          # Putting the fingerprint in the tag makes the version stateless: if
-          # the bytes changed, no tag matches and a new release is cut;
-          # otherwise we skip. Nothing to remember to bump, so it cannot drift.
-          # scripts/fingerprint.sh is the only definition of what it covers.
-          TC_PATHS="$(scripts/fingerprint.sh --paths)"
-          TC_FP="$(scripts/fingerprint.sh)"
-          echo "fingerprint: $TC_FP"
-
-          TC_TAG="$(git tag -l "toolchain-v*-$TC_FP" | head -1)"
-          if [ -n "$TC_TAG" ]; then
-            echo "already released as $TC_TAG"
-          else
-            N="$(git tag -l 'toolchain-v*' \
-                 | sed -n 's|^toolchain-v\([0-9]*\)-.*|\1|p' | sort -n | tail -1)"
-            N=$(( ${N:-0} + 1 ))
-            PREV="$(git tag -l 'toolchain-v*' | sort -V | tail -1)"
-            PREV="${PREV:--}"
-            TC_TAG="toolchain-v$N-$TC_FP"
-
-            if [ "$PREV" != "-" ]; then
-              git log --oneline --no-decorate "$PREV..HEAD" -- $TC_PATHS > changelog.txt
-            else
-              git log --oneline --no-decorate -20 -- $TC_PATHS > changelog.txt
-            fi
-            python3 .github/release_notes.py toolchain tc-notes.md \
-              --toolchain "$TC_TAG" --fingerprint "$TC_FP" \
-              --predecessor "$PREV" --changelog changelog.txt \
-              --versions versions.json
-
-            # A newer toolchain may be accepted for the same Claude version.
-            # Its manifest lets the updater prove that pairing passed Bionic CI.
-            MANIFEST=reports/dist/build-manifest.json
-            [ -f "$MANIFEST" ] || { echo "::error::missing $MANIFEST"; exit 1; }
-            [ "$(stat -c%s "$MANIFEST")" -le 1048576 ] || {
-              echo "::error::toolchain manifest exceeds 1 MiB"; exit 1;
-            }
-
-            # --latest=false: a toolchain tag is not a newer version of the thing
-            # people come here for, and /releases/latest has to keep resolving to
-            # the Claude Code release. Without it GitHub marks the newest release
-            # as Latest, which for a same-run pair is this one.
-            gh release create "$TC_TAG" --title "工具链 v$N ($TC_FP)" \
-              --latest=false --notes-file tc-notes.md "$MANIFEST"
-            echo "released $TC_TAG"
-          fi
-
-          echo "tag=$TC_TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Cut Claude Code release if the version is new
-        if: needs.resolve.outputs.unreleased == 'true'
-        run: |
-          set -euo pipefail
-
-          python3 .github/release_notes.py claude claude-notes.md \
-            --manifest reports/dist/build-manifest.json \
-            --toolchain "${{ steps.toolchain.outputs.tag }}"
 
           # Credentials only. Every asset must be small text; the guard is what
-          # keeps a future edit from quietly attaching dist/claude (~235 MB).
+          # keeps a future edit from quietly attaching dist/claude (~250 MB).
           ASSETS="reports/dist/build-manifest.json
           reports/work/extract-report.json
           reports/work/native-abi.json
@@ -251,29 +218,54 @@ jobs:
             fi
           done
 
-          # An immutable release permanently reserves its tag name, so a yanked
-          # version can never be re-cut as v$VERSION. Attempt it anyway and, if
-          # the API rejects the burned name, cut the next free v$VERSION-rN.
-          TAG="v$VERSION"
-          TITLE="Claude Code $VERSION · Termux"
+          # Toolchain changes since the previous release, for the notes.
+          PREV="$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$GITHUB_SHA" 2>/dev/null || true)"
+          if [ -n "$PREV" ]; then
+            git log --oneline --no-decorate "$PREV..$GITHUB_SHA" -- . \
+              ':(exclude)docs' ':(exclude)tests' ':(exclude)*.md' > changelog.txt
+          else
+            : > changelog.txt
+          fi
+
+          # /releases/latest is what `claude update` follows. Only the highest
+          # Claude version may hold it, so re-cutting an older version cannot
+          # roll every installation back.
+          HIGHEST="$(git tag -l 'v*' | sed -nE 's/^v([0-9]+\.[0-9]+\.[0-9]+)(-r[0-9]+)?$/\1/p' \
+                     | sort -V | tail -1)"
+          LATEST=true
+          if [ -n "$HIGHEST" ] && [ "$(printf '%s\n%s\n' "$HIGHEST" "$VERSION" | sort -V | tail -1)" != "$VERSION" ]; then
+            LATEST=false
+          fi
+
+          # --target pins the tag to the commit this run built: `claude update`
+          # rebuilds from that tag and requires the same binary hash.
+          publish() {
+            python3 .github/release_notes.py claude-notes.md \
+              --manifest reports/dist/build-manifest.json --tag "$1" \
+              --commit "$GITHUB_SHA" --predecessor "${PREV:--}" --changelog changelog.txt
+            title="Claude Code $VERSION · Termux"
+            case "$1" in *-r*) title="$title (${1##*-})" ;; esac
+            gh release create "$1" --target "$GITHUB_SHA" --latest="$LATEST" \
+              --title "$title" --notes-file claude-notes.md $ASSETS
+          }
+
+          # A deleted immutable release still reserves its tag name. If the API
+          # rejects the name, take the next free v$VERSION-rN.
           set +e
-          OUT="$(gh release create "$TAG" --title "$TITLE" \
-            --notes-file claude-notes.md $ASSETS 2>&1)"
+          OUT="$(publish "$TAG" 2>&1)"
           RC=$?
           set -e
+          printf '%s\n' "$OUT"
           if [ "$RC" != "0" ]; then
             if ! printf '%s' "$OUT" | grep -q 'immutable release'; then
-              printf '%s\n' "$OUT" >&2
               exit "$RC"
             fi
             N=1
             while git ls-remote --tags origin "refs/tags/v$VERSION-r$N" | grep -q .; do
               N=$((N+1))
             done
+            echo "$TAG is reserved by an immutable release; re-cutting as v$VERSION-r$N"
             TAG="v$VERSION-r$N"
-            TITLE="Claude Code $VERSION · Termux (r$N)"
-            echo "v$VERSION is reserved by an immutable release; re-cutting as $TAG"
-            gh release create "$TAG" --title "$TITLE" \
-              --notes-file claude-notes.md $ASSETS
+            publish "$TAG"
           fi
           echo "released $TAG"

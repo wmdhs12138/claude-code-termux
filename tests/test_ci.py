@@ -1,9 +1,58 @@
-""".github/: workflow wiring, release notes and the toolchain fingerprint."""
+""".github/: workflow wiring, release logic and release notes."""
 import importlib.util
+import json
+import os
+from pathlib import Path
+import shutil
 import subprocess
+import tempfile
 import unittest
 
 from common import ROOT, WORKFLOW, BIONIC_CI
+
+MANIFEST = {
+    "claude": "1.2.4",
+    "claude_linux_arm64_sha256": "source-hash",
+    "output_sha256": "output-hash",
+    "base_bun": {"version": "1.4.3"},
+    "tui_smoke": {"ran": True, "result": "pass"},
+    "ci_acceptance": {
+        "runtime": "termux-docker/bionic",
+        "architecture": "aarch64",
+        "version_probe": "pass",
+        "tui_smoke": "pass",
+    },
+}
+
+
+def run_block(header):
+    """The shell of the workflow step whose first line is `header`."""
+    lines = WORKFLOW.read_text().splitlines()
+    start = next(i for i, line in enumerate(lines) if line.strip() == header)
+    run = next(i for i in range(start, len(lines)) if lines[i].strip() == "run: |")
+    indent = len(lines[run]) - len(lines[run].lstrip()) + 2
+    body = []
+    for line in lines[run + 1:]:
+        if line.strip() and len(line) - len(line.lstrip()) < indent:
+            break
+        body.append(line[indent:])
+    return "\n".join(body) + "\n"
+
+
+def git(repo, *args):
+    return subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main",
+         *args], cwd=repo, text=True, capture_output=True, check=True,
+    ).stdout.strip()
+
+
+def commit(repo, path, subject):
+    target = Path(repo) / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(subject)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", subject)
+    return git(repo, "rev-parse", "HEAD")
 
 
 class ReleaseNotesTests(unittest.TestCase):
@@ -14,71 +63,126 @@ class ReleaseNotesTests(unittest.TestCase):
         cls.module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.module)
 
-    def test_uses_manifest_source_hash_and_short_build_command(self):
-        manifest = {
-            "claude": "9.8.7",
-            "claude_linux_arm64_sha256": "new-source-hash",
-            "output_sha256": "output-hash",
-            "base_bun": {},
-        }
-        notes = self.module.claude_notes(manifest, "toolchain-test")
-        self.assertIn("new-source-hash", notes)
+    def test_credentials_build_command_and_changes(self):
+        notes = self.module.release_notes(MANIFEST, "v1.2.4", "c" * 40, "v1.2.3",
+                                          "abc1234 runtime: change")
+        self.assertIn("source-hash", notes)
         self.assertIn("output-hash", notes)
-        self.assertIn("scripts/build.sh 9.8.7", notes)
-        self.assertIn("build-manifest.json", notes)
-        self.assertNotIn("Graft 结构自检", notes)
+        self.assertIn("git checkout v1.2.4 && scripts/build.sh 1.2.4", notes)
+        self.assertIn("`cccccccccccc`", notes)
+        self.assertIn("相对 `v1.2.3` 的工具链变更", notes)
+        self.assertIn("abc1234 runtime: change", notes)
+        self.assertNotIn("重新发布", notes)
 
     def test_reports_bionic_acceptance(self):
-        manifest = {
-            "claude": "9.8.7",
-            "output_version": "9.8.7 (Claude Code)",
-            "output_sha256": "output-hash",
-            "base_bun": {},
-            "tui_smoke": {"ran": True, "result": "pass"},
-            "ci_acceptance": {
-                "runtime": "termux-docker/bionic",
-                "architecture": "aarch64",
-                "version_probe": "pass",
-                "tui_smoke": "pass",
-            },
-        }
-        notes = self.module.claude_notes(manifest, "toolchain-test")
+        notes = self.module.release_notes(MANIFEST, "v1.2.4", "c" * 40, "-", "")
         self.assertIn("Bionic AArch64 直接运行、版本探针和 PTY/TUI 渲染通过", notes)
         self.assertNotIn("仅完成结构校验", notes)
+        self.assertIn("（无）", notes)
+        unaccepted = {k: v for k, v in MANIFEST.items() if k != "ci_acceptance"}
+        self.assertIn("仅完成结构校验", self.module.release_notes(unaccepted, "v1.2.4", "c", "-", ""))
 
-    def test_toolchain_notes_focus_on_changes(self):
-        notes = self.module.toolchain_notes(
-            "toolchain-v23-abcdef0", "abcdef0", "toolchain-v22-1234567",
-            "abc1234 refine release notes", {"base_bun": {"version": "1.4.3"}},
-        )
-        self.assertIn("abc1234 refine release notes", notes)
-        self.assertIn("Bun `1.4.3`", notes)
-        self.assertNotIn("已发布过 release 的 Claude 版本", notes)
-        self.assertLess(len(notes), 400)
+    def test_recut_says_what_changed(self):
+        notes = self.module.release_notes(MANIFEST, "v1.2.4-r2", "c" * 40, "v1.2.4-r1", "x")
+        self.assertIn("第 2 次重新发布", notes)
 
 
-class FingerprintTests(unittest.TestCase):
-    FINGERPRINT = ROOT / "scripts" / "fingerprint.sh"
+class ResolveTests(unittest.TestCase):
+    def resolve(self, tags, requested, recut):
+        with tempfile.TemporaryDirectory() as repo:
+            git(repo, "init", "-q")
+            commit(repo, "a", "a")
+            for tag in tags:
+                git(repo, "tag", tag)
+            output = Path(repo) / "github-output"
+            env = dict(os.environ, REQUESTED=requested, RECUT=recut, GITHUB_OUTPUT=str(output))
+            proc = subprocess.run(["bash", "-c", run_block("- name: Resolve requested Claude Code version")],
+                                  cwd=repo, env=env, text=True, capture_output=True)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            return dict(line.split("=", 1) for line in output.read_text().split())
 
-    def test_prints_seven_hex_digits(self):
-        if not (ROOT / ".git").exists():
-            self.skipTest("not a git checkout")
-        proc = subprocess.run(["bash", str(self.FINGERPRINT)], text=True, capture_output=True)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertRegex(proc.stdout.strip(), r"^[0-9a-f]{7}$")
+    def test_new_version_is_released_as_plain_tag(self):
+        out = self.resolve(["v1.2.3"], "1.2.4", "false")
+        self.assertEqual((out["tag"], out["unreleased"]), ("v1.2.4", "true"))
 
-    def test_covers_every_build_input(self):
-        proc = subprocess.run(["bash", str(self.FINGERPRINT), "--paths"],
-                              text=True, capture_output=True)
-        paths = proc.stdout.split()
-        for path in ("install.sh", "versions.json", "scripts", "tools", "runtime", ".github"):
-            self.assertIn(path, paths)
+    def test_released_version_is_not_released_again(self):
+        out = self.resolve(["v1.2.3"], "1.2.3", "false")
+        self.assertEqual(out["unreleased"], "false")
 
-    def test_ci_uses_the_script_instead_of_a_copy(self):
+    def test_recut_takes_the_next_free_suffix(self):
+        out = self.resolve(["v1.2.3", "v1.2.3-r1"], "1.2.3", "true")
+        self.assertEqual((out["tag"], out["unreleased"]), ("v1.2.3-r2", "true"))
+
+
+class PublishTests(unittest.TestCase):
+    """Runs the release job's shell against a scratch repository and a fake gh."""
+
+    ASSETS = [line.strip().removeprefix('ASSETS="').rstrip('"')
+              for line in run_block("- name: Publish release").splitlines()
+              if line.strip().startswith(("reports/", 'ASSETS="reports/'))]
+
+    def publish(self, tags, version, tag, fail_first=False):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            repo.mkdir()
+            git(repo, "init", "-q")
+            commit(repo, "runtime/x.js", "first")
+            for t in tags:
+                git(repo, "tag", t)
+            commit(repo, "runtime/x.js", "runtime: change the shim")
+            head = commit(repo, "docs/x.md", "docs: explain it")
+            shutil.copytree(ROOT / ".github", repo / ".github")
+            for asset in self.ASSETS:
+                path = repo / asset
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("{}")
+            (repo / "reports/dist/build-manifest.json").write_text(json.dumps(MANIFEST))
+            calls = Path(tmp) / "calls.jsonl"
+            fake = Path(tmp) / "bin"
+            fake.mkdir()
+            (fake / "gh").write_text(f"""#!/usr/bin/env python3
+import json, os, sys
+calls = {str(calls)!r}
+n = sum(1 for _ in open(calls)) if os.path.exists(calls) else 0
+with open(calls, "a") as f:
+    f.write(json.dumps({{"args": sys.argv[1:], "notes": open("claude-notes.md").read()}}) + "\\n")
+if {fail_first!r} and n == 0:
+    print("HTTP 422: tag_name was used by an immutable release", file=sys.stderr)
+    sys.exit(1)
+""")
+            (fake / "gh").chmod(0o755)
+            env = dict(os.environ, PATH=f"{fake}:{os.environ['PATH']}", GITHUB_SHA=head,
+                       VERSION=version, TAG=tag)
+            proc = subprocess.run(["bash", "-c", run_block("- name: Publish release")],
+                                  cwd=repo, env=env, text=True, capture_output=True)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            return head, [json.loads(line) for line in calls.read_text().splitlines()]
+
+    def test_pins_the_built_commit_and_lists_toolchain_changes(self):
+        head, calls = self.publish(["v1.2.3"], "1.2.4", "v1.2.4")
+        self.assertEqual(len(calls), 1)
+        args, notes = calls[0]["args"], calls[0]["notes"]
+        self.assertEqual(args[:3], ["release", "create", "v1.2.4"])
+        self.assertEqual(args[args.index("--target") + 1], head)
+        self.assertIn("--latest=true", args)
+        self.assertIn("reports/dist/build-manifest.json", args)
+        self.assertIn("runtime: change the shim", notes)
+        self.assertNotIn("docs: explain it", notes)
+
+    def test_recut_of_an_older_version_does_not_take_latest(self):
+        _, calls = self.publish(["v1.2.3", "v1.2.5"], "1.2.3", "v1.2.3-r1")
+        self.assertIn("--latest=false", calls[0]["args"])
+        self.assertIn("第 1 次重新发布", calls[0]["notes"])
+
+    def test_reserved_tag_falls_back_to_next_recut(self):
+        _, calls = self.publish(["v1.2.3"], "1.2.4", "v1.2.4", fail_first=True)
+        self.assertEqual([c["args"][2] for c in calls], ["v1.2.4", "v1.2.4-r1"])
+        self.assertIn("第 1 次重新发布", calls[1]["notes"])
+
+    def test_no_toolchain_releases(self):
         workflow = WORKFLOW.read_text()
-        self.assertIn('TC_FP="$(scripts/fingerprint.sh)"', workflow)
-        self.assertIn('TC_PATHS="$(scripts/fingerprint.sh --paths)"', workflow)
-        self.assertNotIn("git ls-files", workflow)
+        self.assertNotIn("toolchain-v", workflow)
+        self.assertIn("if: needs.resolve.outputs.unreleased == 'true'", workflow)
 
 
 class BionicCIWiringTests(unittest.TestCase):
@@ -113,13 +217,6 @@ class BionicCIWiringTests(unittest.TestCase):
         )[1].split("\n  release:", 1)[0]
         self.assertNotIn("dist/claude\n", upload)
         self.assertIn("dist/build-manifest.json", upload)
-
-    def test_toolchain_release_attaches_accepted_manifest(self):
-        release = self.workflow.split("- name: Cut toolchain release", 1)[1].split(
-            "- name: Cut Claude Code release", 1
-        )[0]
-        self.assertIn('MANIFEST=reports/dist/build-manifest.json', release)
-        self.assertIn('--latest=false --notes-file tc-notes.md "$MANIFEST"', release)
 
 
 if __name__ == "__main__":

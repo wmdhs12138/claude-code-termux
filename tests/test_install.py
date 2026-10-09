@@ -115,10 +115,12 @@ class InstallerTests(unittest.TestCase):
         self.assertIn('if [ "$VERSION" = "latest" ]; then', installer)
         self.assertIn('bash "$ROOT/scripts/install-approved.sh"', installer)
         self.assertIn('"$repo_url/releases/latest"', approved)
-        self.assertIn('source_tag="$release_tag"', approved)
-        self.assertIn('releases/download/$toolchain_tag/build-manifest.json', approved)
+        self.assertIn('tag_ref="refs/tags/$release_tag"', approved)
+        self.assertNotIn('toolchain-v', approved)
         self.assertIn('$tmp_root/claude-code-termux-install.XXXXXX', approved)
-        self.assertIn('built_hashes" != "$expected_hashes', approved)
+        # Inputs first, then the reproducible output hash.
+        self.assertIn('"${built_hashes% *}" != "${approved_hashes% *}"', approved)
+        self.assertIn('"$built_hashes" != "$approved_hashes"', approved)
         self.assertIn('bash "$source_dir/install.sh" --no-build', approved)
         self.assertNotIn('refs/heads/main', approved)
 
@@ -133,6 +135,7 @@ class InstallerTests(unittest.TestCase):
                 "claude": "2.1.281",
                 "claude_linux_arm64_sha256": "a" * 64,
                 "base_bun": {"archive_sha256": "b" * 64, "binary_sha256": "c" * 64},
+                "output_sha256": "d" * 64,
                 "tui_smoke": {"ran": True, "result": "pass"},
                 "ci_acceptance": {
                     "runtime": "termux-docker/bionic",
@@ -148,6 +151,7 @@ class InstallerTests(unittest.TestCase):
             path.write_text(json.dumps(doc))
             rejected = subprocess.run(args, input=script, text=True, capture_output=True)
         self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertEqual(accepted.stdout.split(), ["a" * 64, "b" * 64, "c" * 64, "d" * 64])
         self.assertNotEqual(rejected.returncode, 0)
 
     def test_defaults_to_termux_prefix_bin(self):
