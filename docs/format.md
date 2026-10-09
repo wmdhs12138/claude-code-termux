@@ -1,8 +1,8 @@
 # Bun standalone `.bun` 节格式笔记
 
 本文记录 claude-code-termux 移植过程中逆向出的 Bun standalone 模块图格式（Bun ≥ 1.4 的
-"new section" 格式），以及嫁接手术的依据。所有结论都经过二进制实测；证据见
-`evidence/`。
+"new section" 格式），以及嫁接手术的依据。所有结论都经过二进制实测。对模块图内容做的改动
+见 [adaptations.md](adaptations.md)。
 
 ## 1. 定位
 
@@ -87,9 +87,10 @@ Claude 2.1.270：`flags = 0x1fff`（bit 0–12 全开），1864 个模块，`ent
   说明字节码版本不符时 JSC 会回退解析内嵌源码。
 - **图格式随运行时版本演进**：同一份 Claude graph 嫁接到 Bun 1.4.2 底座会
   段错误（`0x40`），因为 1.4.2 不认识 bit 11/12 及其布局；换 1.4.3-canary 底座后完全正常。
-- **TUI 无关**：Claude Code 的 TUI 是 Ink/React 纯 JS，不需要像 opencode 那样自建
-  `libopentui.so`；唯一的原生依赖是内嵌 ripgrep（Linux ELF），用
-  `USE_BUILTIN_RIPGREP=0` + Termux `ripgrep` 替代。
+- **TUI 基本是纯 JS**：Claude Code 的 TUI 是 Ink/React，不需要像 opencode 那样自建
+  `libopentui.so`。例外是 2.1.271 起的 `Bun.ant.CellSegmenter`（私有运行时接口，用 JS 实现补上）。
+  图里另有两个 glibc 原生插件 `clipboard-napi.node`、`audio-capture.node`，加载失败时 Claude 自己会降级；
+  内嵌 ripgrep 同样是 glibc ELF，用 `USE_BUILTIN_RIPGREP=0` + Termux `ripgrep` 替代。
 
 ## 4. 嫁接手术（Bun ≥ 1.4，plain-offset）
 
@@ -103,56 +104,13 @@ Claude 2.1.270：`flags = 0x1fff`（bit 0–12 全开），1864 个模块，`ent
 5. 扩展该 PT_LOAD 的 `p_filesz`/`p_memsz` 覆盖新数据。
 
 产物是否成形由 `tools/verify_graft.py` 反向校验：`.bun[0]` → `[u64 payload_len]` →
-payload 尾部 trailer → Offsets 结构 → 模块表首尾相接。这条链就是运行时启动时走的路径，
-x64 CI 执行不了 aarch64 产物，只能靠它把关（见 §6）。
+payload 尾部 trailer → Offsets 结构 → 模块表首尾相接。这条链就是运行时启动时走的路径；
+在执行不了 aarch64 Bionic 产物的机器上（`SKIP_RUN=1`），它是唯一的结构关卡。
 
-## 5. 移植适配：关闭 bfs/ugrep shell 遮蔽
+## 5. 构建报告
 
-官方二进制由「原生 prelude + Bun standalone」组成。prelude 内嵌 bfs/ugrep，并通过
-原生 launch options 打开 `searchToolsOptIn()`。JS 侧逻辑：
-
-```js
-function KKn(){ return n().host.launchOptions.searchToolsOptIn() }   // 唯一调用点
-function Qb(){ if(!Ie("true")) return !1; if(KKn()) return !1; return a.CLAUDE_CODE_ENTRYPOINT!=="local-agent" }
-```
-
-`Qb()` 为 true 时，shell 快照生成器 `yis()` 会注入：
-
-```bash
-grep () { ... ( exec -a ugrep "$_cc_bin" -G --ignore-files --hidden -I ... ) }
-find () { ... ( exec -a bfs   "$_cc_bin" -S dfs ... ) }
-```
-
-其中 `_cc_bin="${CLAUDE_CODE_EXECPATH}"`（CLI 自身路径）。官方 prelude 检测 argv0
-为 `ugrep`/`bfs` 时分派到内嵌程序；bionic 嫁接产物没有 prelude，于是普通 CLI 收到
-`-G` 并报 `error: unknown option '-G'`。
-
-`tools/adapt_graph.py` 的处理（等长替换，不移动任何 StringPointer）：
-
-1. 把 `function KKn(){return n().host.launchOptions.searchToolsOptIn()}` 替换为
-   `function KKn(){return!0<pad>}`；
-2. 把 `KKn` 所在模块（2.1.270: `chunk-74sfngb9.js`，约 100 KB；此文件名随版本变化，
-   `adapt_graph.py` 按函数体特征串定位，不写死模块名）的 `bytecode`/`module_info`
-   StringPointer 清零，强制该模块从源码编译，使补丁生效（其余模块仍走字节码）。
-
-效果：`grep`/`find` 不再被遮蔽，Bash 使用 Termux 系统二进制；Grep 工具继续走
-`USE_BUILTIN_RIPGREP=0` + 系统 `rg`。启动耗时与未适配版一致（~0.7s）。
-
-`tools/embed_preload.py` 随后把 `CellSegmenter` 兼容实现插入 entry module 的源码，修正受影响的
-所有 graph-relative `StringPointer` 和 Offsets，并清零 entry 的 bytecode/module-info/origin。
-最终 ELF 因而无需 `BUN_OPTIONS=--preload` 或旁路 JS 文件，可直接执行并渲染首屏。
-
-同一段代码还在 Android 上补齐 `Bun.ant.getPeerPid(fd)` / `getPeerUid(fd)`：首次调用时用
-`bun:ffi` 打开 Bionic `libc.so`，以 `getsockopt(fd, SOL_SOCKET, SO_PEERCRED)` 读取对端
-`struct ucred`。跨会话消息（SendMessage、回执、idle 通知）在写入本地 socket 前要求这两项都
-能读出，否则以 `endpoint-unverifiable` 拒发。`memoryPressureLevel()` 不补：Claude 只在 macOS
-分支调用它，Linux 分支用 `os.freemem()`，Bun 在 Android 上取的就是 `MemAvailable`。
-
-## 6. 证据
-
-- `evidence/sha256.txt`：官方二进制校验
-- `evidence/revive-1.log`：1.4.2 底座嫁接（后续段错误，记录失败路径；本地证据，不进仓库）
-- `evidence/revive-3.log`：1.4.3-canary 底座嫁接（成功；本地证据，不进仓库）
-- `dist/build-manifest.json`：每次构建的版本/哈希指纹、适配与 preload 嵌入报告，以及 graft
-  自检结果（payload vaddr / 模块数 / entry）
-- `work/adapt-report.json` · `work/embed-preload.json` · `work/verify-graft.json`：原始报告，CI 一并归档
+- `dist/build-manifest.json`：每次构建的版本与哈希、适配列表、runtime 嵌入报告、ABI 检查结果、graft
+  自检结果（payload vaddr / 模块数 / entry）和 TUI 冒烟结果；Release 附的就是它。
+- `work/extract-report.json` · `work/native-abi.json` · `work/adapt-report.json` · `work/runtime.json` ·
+  `work/embed-preload.json` · `work/verify-graft.json` · `work/tui-smoke.json`：各步骤的原始报告，CI 一并归档。
+- 1.4.2 底座嫁接后段错误、1.4.3-canary 底座成功的两次对照（§3）当时只留了本地日志，没有进仓库。

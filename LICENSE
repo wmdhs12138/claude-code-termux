@@ -20,13 +20,4 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
----
-
-Third-party notices:
-
-- tools/revive_patch.py is vendored, unmodified, from
-  https://github.com/Hope2333/opencode-termux (native-android branch),
-  MIT License, Copyright (c) Hope2333 (幽零小喵).
-- This project contains no Anthropic code. `scripts/build.sh` downloads the official
-  Claude Code binary from Anthropic's CDN at build time; the resulting binary
-  is for personal use only and must not be redistributed.
+Third-party components and notices: see THIRD_PARTY.md.

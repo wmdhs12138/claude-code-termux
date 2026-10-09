@@ -23,53 +23,64 @@ cd ~/claude-code-termux
 claude
 ```
 
-安装器每次都会刷新软件包索引、升级 Termux 环境，并安装当前软件源提供的最新版依赖，随后选取已通过 Bionic CI 的最新 Claude Release，在 Termux 临时目录构建、验证并原子安装到
-`$PREFIX/bin/claude`。指定版本可运行 `./install.sh VERSION`，这会使用当前克隆的源码构建；目标目录可用
-`CLAUDE_CODE_TERMUX_INSTALL_DIR` 覆盖。
+安装器会刷新软件包索引、升级 Termux 环境并安装依赖，然后选取已通过 Bionic CI 的最新 Claude
+Release，在 Termux 临时目录构建、验证，并原子安装到 `$PREFIX/bin/claude`。最终 ELF 超过
+200 MiB，首次构建需要额外的下载和临时空间。装好后可以删除克隆的目录，更新不依赖它。
 
-如软件源过旧导致依赖版本冲突，运行 `termux-change-repo` 选择同步及时的镜像后重试。
-已自行准备依赖时，可设置 `CLAUDE_CODE_TERMUX_SKIP_DEPS=1` 跳过软件包更新和安装；
-`make install` 只安装现有产物，不更新软件包。Bionic Bun 底座仍采用经过验收的固定版本和 SHA-256。
-
-最终 ELF 超过 200 MiB，首次构建需要额外下载和临时空间。安装完成后可以删除克隆的项目目录，
-内置更新器不依赖它。重新运行 `install.sh` 时，原有的 `claude` 会备份为同目录下的隐藏文件
-`.claude.backup`，只保留最近一份；需要回滚时运行
-`mv -f "$PREFIX/bin/.claude.backup" "$PREFIX/bin/claude"`。
+- 指定版本：`./install.sh VERSION`（用当前克隆的源码构建）。
+- 安装位置：`CLAUDE_CODE_TERMUX_INSTALL_DIR` 覆盖。
+- 依赖已自行准备：`CLAUDE_CODE_TERMUX_SKIP_DEPS=1` 跳过软件包更新。软件源过旧导致版本冲突时，
+  先运行 `termux-change-repo` 换一个同步及时的镜像。
+- 重装时原有的 `claude` 备份为同目录下的 `.claude.backup`，只保留一份；回滚：
+  `mv -f "$PREFIX/bin/.claude.backup" "$PREFIX/bin/claude"`。
 
 ## 更新
 
 ```bash
-claude update --check   # 检查最新已验收版本，不修改文件
-claude update           # 有已验收新版时构建并替换
+claude update --check   # 查看最新已验收版本，不修改文件
+claude update           # 有已验收的新版时构建并替换
 claude update --force   # 用已验收的最新工具链重新构建
 ```
 
-这里不会调用 Claude 官方更新器，因为它会下载不能在 Termux 运行的 glibc 产物。内置更新器只采用
-本项目已通过 Bionic CI 的 Claude Release；同版本工具链更新也须有匹配的验收清单。它在 Termux
-临时目录构建候选，核对官方输入哈希、版本和 TUI 结果后才原子替换当前命令。下载、构建或验证失败时，
-原有 `claude` 保持不变。上游刚发布但尚未通过 CI 的版本不会出现在 `claude update --check` 中。
+不会调用官方更新器，因为它下载的是不能在 Termux 运行的 glibc 版本。`claude update` 只采用本项目
+CI 验收过的 Release：在临时目录用对应的工具链构建，核对官方输入哈希、版本和 TUI 结果后才原子替换；
+任何一步失败，原有的 `claude` 都保持不变。上游刚发布、还没通过 CI 的版本不会出现，CI 每天检查一次。
 
-官方目前只发布完整 standalone，没有跨版本差分包；HTTP Range 只能续传中断的单次下载。因此旧
-Claude 包不会加速下一版本更新。官方 Claude、工具链源码和构建中间产物都放在 `$TMPDIR`，更新
-成功或失败后立即删除；缓存目录只保留一份按 SHA-256 寻址的干净 Bun 底座，只有 Bun 哈希变化时
-才重新下载。可用 `CLAUDE_CODE_TERMUX_BUN_CACHE_KEEP=N` 提高 Bun 底座保留数量。
+## 功能一览
+
+| 功能 | 状态 |
+| --- | --- |
+| 交互界面、`claude -p`、Bash / Read / Edit / Write、MCP、插件、技能、子代理、钩子 | 可用。运行的是官方模块图本身，CI 在 Bionic 里真实渲染 TUI |
+| Grep / Glob 工具，Bash 里的 `grep` / `find` | 可用，改用 Termux 的 `ripgrep`、`grep`、`find`（内嵌的是 Linux 版） |
+| 跨会话消息（`SendMessage`、空闲通知、回执） | 可用，对端身份核验由本项目补上 |
+| `claude update` | 可用，只跟随已验收的 Release，在本机构建 |
+| 沙箱 | **不可用**：Android 上没有 bubblewrap，命令以 Termux 用户的权限运行 |
+| 语音模式、剪贴板图片粘贴 | 不可用：内嵌的原生插件链接 glibc，Bionic 加载不了 |
+| IDE、Chrome 扩展、桌面应用联动 | 不适用 |
+
+细节、和桌面版的差异，以及还能补什么，见 [docs/limitations.md](docs/limitations.md)。
+
+## 使用前请知道
+
+- **没有沙箱隔离。** 命令的约束只剩权限提示，请据此选择权限模式。
+- **不要分发构建产物。** 生成的 ELF 是 Anthropic 专有程序的修改副本，只供个人研究与自用；
+  本仓库和 Release 都不包含 Claude 二进制，请遵守 Anthropic 的许可与服务条款。
+- **私有运行时接口可能变化。** Claude 使用 Anthropic 私有 Bun 的 `Bun.ant.*` 接口，上游一变，
+  构建会在检查阶段失败，而不是产出坏掉的二进制；对应版本要等兼容层跟上才会发布。
 
 ## 实现
 
-官方 Claude Code 是 Bun standalone，但 Linux AArch64 版本使用 glibc，不能直接由 Android 的
-Bionic linker 加载。本项目不拥有或重新编译 Claude 源码，只移植官方二进制中的模块图。
-
 ```text
 official Claude Code linux-arm64
-                │ extract Bun graph
+                │ extract the Bun module graph
                 ▼
-      apply Termux compatibility
-       ├─ disable bfs/ugrep shadowing
-       ├─ provide Bun.ant.CellSegmenter
-       ├─ provide Bun.ant.getPeerPid/getPeerUid
-       ├─ embed Android runtime defaults
-       └─ embed the Bionic updater
-                │ graph graft
+      patch the graph (search_shadow)
+      embed runtime/ into the entry module
+       ├─ Android defaults
+       ├─ Bionic `claude update`
+       ├─ Bun.ant.getPeerPid / getPeerUid
+       └─ Bun.ant.CellSegmenter
+                │ graft
                 ▼
           pinned Bionic Bun
                 │
@@ -77,68 +88,31 @@ official Claude Code linux-arm64
       dist/claude · single Bionic ELF
 ```
 
-补丁按结构与 ABI 特征匹配，而不是依赖每个版本都会变化的压缩变量名。上游模块布局或私有
-`Bun.ant.*` 接口发生未知变化时，构建会直接失败，不会替换已有产物。账号、模型、API 端点和代理
-设置不受修改。
+改动按结构和行为特征定位，不依赖每个版本都会变的压缩变量名；找不到或接口有变化时构建直接失败。
+账号、模型、API 端点和代理设置都不受影响。
 
-Bun standalone 格式和嫁接细节见 [格式文档](docs/format.md)。
+## 文档
 
-## CI
-
-GitHub Actions 使用原生 ARM64 runner 和固定 digest 的官方 `termux/termux-docker` 镜像完成自动
-Bionic 验收：
-
-- Pull Request：运行工具链与模块图回归测试；
-- 推送至 `main`：构建并实际执行当前版本；
-- 每天：检查官方最新版，通过全部验收后自动发布；
-- 手动运行：验证 `latest` 或指定版本。
-
-发布前会校验下载哈希、私有 Bun ABI、模块图、graft 闭环、版本输出，并通过 PTY 渲染和识别真实
-Claude TUI。常规 Claude 更新不再等待维护者手机手工放行；更换 Bun 底座、最低 Android API 或
-涉及 Android 系统生命周期时，仍以物理设备为最终参考。详见 [CI 文档](docs/ci.md)。
-
-CI 内部会构建并执行 Claude，但 Action artifact 和 GitHub Release **只包含小型文本凭证，不包含
-Claude 二进制**。
+| | |
+| --- | --- |
+| [docs/adaptations.md](docs/adaptations.md) | 对官方模块图的每一处改动、原因，以及构建时的检查 |
+| [docs/limitations.md](docs/limitations.md) | 已知限制、与桌面版的差异、可以补的办法和验证范围 |
+| [docs/format.md](docs/format.md) | Bun standalone `.bun` 节格式和嫁接手术 |
+| [docs/ci.md](docs/ci.md) | CI 流水线、工具链版本和发布边界 |
+| [docs/maintaining.md](docs/maintaining.md) | 维护手册：跟进上游、改运行时、换 Bun 底座、兼容约束、踩过的坑 |
+| [tests/README.md](tests/README.md) | 各测试文件的作用 |
 
 ## 从源码构建
 
 ```bash
-make test
-make build VERSION=latest
-make install
+python3 -m unittest discover -s tests   # 回归测试，不联网
+scripts/build.sh latest                  # 产物：dist/claude 与 dist/build-manifest.json
+./install.sh --no-build                  # 原子安装 dist/claude
 ```
 
-`make build` 完成下载校验、模块图提取、ABI 检查、兼容层注入、ELF 嫁接、版本探针和真实 TUI
-smoke test。`make install` 原子安装已经验证的 `dist/claude`。
+`scripts/build.sh` 依次完成下载校验、模块图提取、ABI 检查、兼容层注入、ELF 嫁接、版本探针和真实
+TUI 冒烟，全部通过才替换 `dist/claude`。下载和中间产物在 `work/`，可以随时删除。
+[`versions.json`](versions.json) 只锁定 Bun 底座；更换底座见 [维护手册](docs/maintaining.md)。
 
-[`versions.json`](versions.json) 保存固定输入哈希和最后一次物理 Android 验证快照。评估新的 Bun
-底座时必须显式运行：
-
-```bash
-BUN_URL=<candidate-url> make refresh-base
-```
-
-只有候选在 Android 上通过直接执行和 TUI 验证后，才应接受新的 Bun 锁定值。
-
-## 限制与分发
-
-- 仅支持 AArch64、Android 9+；不支持 32 位 ARM、x86 或 Android 8 及以下。
-- Claude 使用 Anthropic 私有 Bun ABI，上游变化可能要求更新兼容层。
-- 内嵌 Linux ripgrep 不可用，项目使用 Termux 的 `ripgrep` 包。
-- termux-docker 是 Bionic 用户态，不覆盖 Doze、应用回收或厂商 ROM 行为。
-
-本仓库只包含 MIT 工具链。Claude Code 在构建时由用户设备从 Anthropic 官方 CDN 下载，并在本地
-处理。生成的 ELF 是 Anthropic 专有程序的修改副本，仅供个人研究与自用，请勿重新分发，并请遵守
-Anthropic 的许可与服务条款。Bionic Bun 是独立的 MIT 软件，可单独发布。
-
-## 致谢
-
-- [Hope2333/opencode-termux](https://github.com/Hope2333/opencode-termux)：
-  `BUN_COMPILED.size` 与 PT_LOAD 移植方法
-- [oven-sh/bun](https://github.com/oven-sh/bun)：Bun 与 Android Bionic 支持
-- [Anthropic Claude Code](https://github.com/anthropics/claude-code)
-- [Termux](https://github.com/termux/termux-app)
-
-## License
-
-MIT，仅适用于本仓库工具链。详见 [LICENSE](LICENSE)。
+仅支持 AArch64、Android 9+。本仓库只包含 MIT 工具链，第三方组件与致谢见
+[THIRD_PARTY.md](THIRD_PARTY.md)。本项目与 Anthropic 无关联。
