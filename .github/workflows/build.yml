@@ -182,7 +182,7 @@ jobs:
           # .github/ is in the set because it decides what a release *says*: a
           # change to the note generator that stayed outside the fingerprint
           # would ship with no tag recording it.
-          TC_PATHS="install.sh scripts tools .github"
+          TC_PATHS="install.sh scripts tools runtime .github"
           TC_FP="$(git ls-files -z $TC_PATHS | sort -z \
                     | xargs -0 sha256sum | sha256sum | cut -c1-7)"
           echo "fingerprint: $TC_FP"

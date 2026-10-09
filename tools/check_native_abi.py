@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Fail the build when Claude Code's native Ink ABI drifts away from the
-surface tools/cellsegmenter-polyfill.js implements.
+surface runtime/40-cell-segmenter.js implements.
 
 Since 2.1.271 src/ink renders through Bun.ant.CellSegmenter, an interface of
 Anthropic's private @anthropic-ai/bun-internal runtime. The polyfill is written
@@ -10,9 +10,9 @@ render and shows a blank terminal -- usually discovered by a user, not by CI.
 Scanning the extracted graph makes that a build failure instead.
 
 Checks:
-  * Bun.ant.* reads stay inside the known set. The polyfill also provides
-    getPeerPid/getPeerUid (SO_PEERCRED via bun:ffi) for cross-session
-    messaging. memoryPressureLevel/setDumpable are optional probes that
+  * Bun.ant.* reads stay inside the known set. runtime/30-peer-credentials.js
+    provides getPeerPid/getPeerUid (SO_PEERCRED via bun:ffi) for
+    cross-session messaging. memoryPressureLevel/setDumpable are optional probes that
     degrade by themselves on runtimes that lack them.
   * Modules that construct Bun.ant.CellSegmenter, together with the modules
     that import the factory wrapping that constructor, only call the native
@@ -162,7 +162,7 @@ def analyze(data):
         'native_members': sorted(native),
         'set_cell': set_cell,
         'token_seen': token_seen,
-        'polyfill': 'tools/cellsegmenter-polyfill.js',
+        'polyfill': 'runtime/40-cell-segmenter.js',
     }
 
     unknown_ant = bun_ant - KNOWN_BUN_ANT
@@ -190,7 +190,7 @@ def analyze(data):
     if unknown_native:
         raise DriftError(
             'CellSegmenter uses new native member(s) ' + ', '.join(sorted(unknown_native)) +
-            '; extend tools/cellsegmenter-polyfill.js before shipping')
+            '; extend runtime/40-cell-segmenter.js before shipping')
     return report
 
 

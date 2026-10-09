@@ -46,7 +46,7 @@ clean:
 # below must match the workflow's TC_PATHS; if the two ever drift, this target
 # stops reproducing the published tag, which is how the drift gets noticed.
 fingerprint:
-	@git ls-files -z install.sh scripts tools .github | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-7
+	@git ls-files -z install.sh scripts tools runtime .github | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-7
 
 # The default base comes from an immutable mirrored release, so plain builds
 # stay reproducible. To evaluate another upstream Bun, pass BUN_URL explicitly;

@@ -239,7 +239,7 @@ GRAPH="$WORK/claude-graph.bin"
 python3 "$ROOT/tools/extract_graph.py" "$CLAUDE_BIN" "$GRAPH" > "$WORK/extract-report.json"
 echo "build: graph extracted ($(stat -c%s "$GRAPH") bytes)" >&2
 
-# 3a. Native Ink ABI guard: tools/cellsegmenter-polyfill.js is written against
+# 3a. Native Ink ABI guard: runtime/40-cell-segmenter.js is written against
 #     the Bun.ant.CellSegmenter member surface this graph uses. A drift turns
 #     into a blank terminal at the user's first launch, so fail here instead;
 #     the candidate is not grafted and dist/claude stays untouched.
@@ -253,17 +253,16 @@ GRAPH_SEARCH_ADAPTED="$WORK/claude-graph-search-adapted.bin"
 python3 "$ROOT/tools/adapt_graph.py" "$GRAPH" "$GRAPH_SEARCH_ADAPTED" --report "$WORK/adapt-report.json" > "$WORK/adapt-report.log"
 echo "build: adaptations applied ($(head -1 "$WORK/adapt-report.log"))" >&2
 
-# 3c. Embed the private-runtime compatibility shim into the entry module.  The
-#     resulting ELF starts directly: no launcher or BUN_OPTIONS preload path is
-#     required at runtime.
-POLYFILL="$ROOT/tools/cellsegmenter-polyfill.js"
-if [ ! -r "$POLYFILL" ]; then
-  fail_before_promote "tools/cellsegmenter-polyfill.js is missing; Claude >= 2.1.271 cannot render without it"
-fi
+# 3c. Embed runtime/ (Android defaults, self-updater, Bun.ant shims) into the
+#     entry module. The resulting ELF starts directly: no launcher or
+#     BUN_OPTIONS preload path is required at runtime.
+RUNTIME_JS="$WORK/runtime.js"
+python3 "$ROOT/tools/assemble_runtime.py" "$ROOT/runtime" "$RUNTIME_JS" \
+  --report "$WORK/runtime.json" > "$WORK/runtime.log"
 GRAPH_ADAPTED="$WORK/claude-graph-adapted.bin"
-python3 "$ROOT/tools/embed_preload.py" "$GRAPH_SEARCH_ADAPTED" "$POLYFILL" \
+python3 "$ROOT/tools/embed_preload.py" "$GRAPH_SEARCH_ADAPTED" "$RUNTIME_JS" \
   "$GRAPH_ADAPTED" --report "$WORK/embed-preload.json" > "$WORK/embed-preload.log"
-echo "build: CellSegmenter compatibility embedded into the entry module" >&2
+echo "build: runtime embedded into the entry module ($(python3 -c 'import json,sys; print(", ".join(json.load(open(sys.argv[1]))["modules"]))' "$WORK/runtime.json"))" >&2
 
 # 4. graft onto the Android Bun ELF (BUN_COMPILED.size + PT_LOAD surgery).
 #    Staged to a temp path and left there: it does NOT replace dist/claude until
@@ -346,11 +345,11 @@ GRAPH_SHA="$(sha256sum "$GRAPH_ADAPTED" | cut -d' ' -f1)"
 python3 - "$MANIFEST_NEW" "$VER" "$CLAUDE_SHA" "$OUT_VER" "$OUT_SHA" "$OUT_SIZE" \
         "$BUN_VER" "$BUN_ARCHIVE_SHA" "$BUN_SHA" "$BUN_URL" "$GRAPH_SHA" \
         "$WORK/adapt-report.json" "$WORK/embed-preload.json" "$WORK/verify-graft.json" \
-        "$WORK/native-abi.json" "$WORK/tui-smoke.json" <<'PY'
+        "$WORK/native-abi.json" "$WORK/tui-smoke.json" "$WORK/runtime.json" <<'PY'
 import json, sys, datetime
 (path, ver, claude_sha, out_ver, out_sha, out_size, bun_ver, bun_archive_sha,
  bun_sha, bun_url, graph_sha, adapt_path, embed_path, graft_path, abi_path,
- smoke_path) = sys.argv[1:17]
+ smoke_path, runtime_path) = sys.argv[1:18]
 def load(p):
     with open(p) as f:
         return json.load(f)
@@ -363,12 +362,12 @@ doc = {
     "graph_sha256": graph_sha,
     # Read from the adaptation run itself, never a hardcoded list: a credential
     # that understates what the build did is worse than no credential.
-    "adaptations": load(adapt_path)["adaptations"] + ["embedded_cellsegmenter", "embedded_peer_credentials"],
+    "adaptations": load(adapt_path)["adaptations"] + load(runtime_path)["adaptations"],
     "embedded_preload": load(embed_path),
     # What the structural check verified about this exact artifact (step 5).
     "graft": load(graft_path),
-    # The native Ink surface this graph used and the polyfill was checked
-    # against (step 3a), so an ABI change is visible in the release credential.
+    # The native Ink surface this graph used and runtime/40-cell-segmenter.js
+    # was checked against (step 3a), so an ABI change is visible in the release credential.
     "native_abi": load(abi_path),
     # Whether this exact artifact actually rendered a frame (step 5b). False on
     # an x64 CI build, which cannot execute the aarch64 binary at all -- so read
@@ -400,11 +399,11 @@ if [ "${SKIP_RUN:-0}" != "1" ]; then
 fi
 python3 - "$ROOT/versions.json" "$VERSIONS_NEW" "$VER" "$CLAUDE_SHA" "$BUN_VER" \
         "$BUN_ARCHIVE_SHA" "$BUN_SHA" "$OUT_SHA" "$OUT_SIZE" "$GRAPH_SHA" "$DEVICE" \
-        "$VERIFIED_ON" "$BUN_URL" "$WORK/adapt-report.json" "$WORK/embed-preload.json" <<'PY'
+        "$VERIFIED_ON" "$BUN_URL" "$WORK/adapt-report.json" "$WORK/runtime.json" <<'PY'
 import json, sys
 (source_path, path, ver, claude_sha, bun_ver, bun_archive_sha, bun_sha,
  out_sha, out_size, graph_sha, device, verified_on, bun_url,
- adapt_path, embed_path) = sys.argv[1:16]
+ adapt_path, runtime_path) = sys.argv[1:16]
 try:
     doc = json.load(open(source_path))
 except (OSError, ValueError):
@@ -422,7 +421,7 @@ doc["verified_output"] = {
     "sha256": out_sha,
     "size": int(out_size),
     "graph_sha256": graph_sha,
-    "adaptations": json.load(open(adapt_path))["adaptations"] + ["embedded_cellsegmenter", "embedded_peer_credentials"],
+    "adaptations": json.load(open(adapt_path))["adaptations"] + json.load(open(runtime_path))["adaptations"],
     # verified_on = the built binary was executed here and reported the
     # expected version (build.sh step 5). Deeper checks (TUI, tools) stay manual.
     "device": device or None,

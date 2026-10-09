@@ -17,7 +17,9 @@ SMOKE = ROOT / "tools" / "tui_smoke.py"
 FETCH = ROOT / "scripts" / "fetch-claude.sh"
 BUILD = ROOT / "scripts" / "build.sh"
 UPDATE = ROOT / "scripts" / "update.sh"
-POLYFILL = ROOT / "tools" / "cellsegmenter-polyfill.js"
+RUNTIME = ROOT / "runtime"
+SELF_UPDATE = RUNTIME / "self-update.sh"
+ASSEMBLE_RUNTIME = ROOT / "tools" / "assemble_runtime.py"
 EMBED_PRELOAD = ROOT / "tools" / "embed_preload.py"
 INSTALL = ROOT / "install.sh"
 INSTALL_APPROVED = ROOT / "scripts" / "install-approved.sh"
@@ -77,14 +79,14 @@ class VersionValidationTests(unittest.TestCase):
             self.assertIn("(migrated)", proc.stderr)
 
     def test_embedded_update_enables_shared_bun_cache(self):
-        source = POLYFILL.read_text()
+        source = SELF_UPDATE.read_text()
         self.assertIn(
             'CLAUDE_CODE_TERMUX_SHARED_BUN_CACHE="$cache_root/bun-bases"', source
         )
         self.assertIn('scripts/ensure-bun-base.sh', BUILD.read_text())
 
     def test_embedded_update_uses_approved_releases_without_github_api_quota(self):
-        source = POLYFILL.read_text()
+        source = SELF_UPDATE.read_text()
         self.assertIn('claude-code-termux/releases/latest', source)
         self.assertIn('releases/download/$release_tag/build-manifest.json', source)
         self.assertIn('releases/download/$toolchain_tag/build-manifest.json', source)
@@ -706,9 +708,18 @@ class InstallerTests(unittest.TestCase):
         self.assertNotIn("launcher.sh", section)
 
 
-class CellSegmenterPolyfillTests(unittest.TestCase):
+def assemble_runtime(out_dir):
+    out = Path(out_dir) / "runtime.js"
+    proc = subprocess.run([sys.executable, str(ASSEMBLE_RUNTIME), str(RUNTIME), str(out)],
+                          text=True, capture_output=True)
+    if proc.returncode:
+        raise AssertionError(proc.stdout + proc.stderr)
+    return out
+
+
+class RuntimeTests(unittest.TestCase):
     def test_file_implements_the_native_surface(self):
-        source = POLYFILL.read_text()
+        source = (RUNTIME / "40-cell-segmenter.js").read_text()
         for member in ("Bun.ant.CellSegmenter =", "segment(text, cells, runs", "paint(", "setCell("):
             self.assertIn(member, source)
 
@@ -719,25 +730,49 @@ class CellSegmenterPolyfillTests(unittest.TestCase):
                 break
         else:
             self.skipTest("no JS runtime available for a syntax check")
-        proc = subprocess.run([exe, "--check", str(POLYFILL)], text=True, capture_output=True)
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        with tempfile.TemporaryDirectory() as tmp:
+            for path in [*sorted(RUNTIME.glob("*.js")), assemble_runtime(tmp)]:
+                proc = subprocess.run([exe, "--check", str(path)], text=True, capture_output=True)
+                self.assertEqual(proc.returncode, 0, f"{path.name}: {proc.stdout}{proc.stderr}")
+
+    def test_assembly_inlines_the_updater_and_keeps_module_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = assemble_runtime(tmp).read_text()
+        self.assertNotIn("__include__", source)
+        self.assertIn(json.dumps(SELF_UPDATE.read_text()), source)
+        order = [source.index(f"// runtime/{p.name}\n") for p in sorted(RUNTIME.glob("*.js"))]
+        self.assertEqual(order, sorted(order))
+        # The updater exits the process, so it must run before the shims load.
+        self.assertLess(source.index("// runtime/20-self-update.js"),
+                        source.index("// runtime/30-peer-credentials.js"))
+
+    def test_assembly_rejects_a_missing_include(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp) / "runtime"
+            runtime.mkdir()
+            (runtime / "10-x.js").write_text('var s = __include__("missing.sh");')
+            proc = subprocess.run(
+                [sys.executable, str(ASSEMBLE_RUNTIME), str(runtime), str(Path(tmp) / "out.js")],
+                text=True, capture_output=True,
+            )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("missing.sh", proc.stderr)
 
     def test_embeds_direct_exec_android_defaults(self):
-        source = POLYFILL.read_text()
-        self.assertIn('process.platform === "android"', source)
+        source = (RUNTIME / "10-android-defaults.js").read_text()
+        self.assertIn('process.platform !== "android"', source)
         self.assertIn('process.env.USE_BUILTIN_RIPGREP === undefined', source)
         self.assertIn('process.env.DISABLE_AUTOUPDATER === undefined', source)
 
     def test_provides_peer_credentials_without_overriding_native(self):
-        source = POLYFILL.read_text()
+        source = (RUNTIME / "30-peer-credentials.js").read_text()
         self.assertIn('process.getBuiltinModule("bun:ffi")', source)
         self.assertIn("var SO_PEERCRED = 17;", source)
         self.assertIn('if (typeof Bun.ant.getPeerPid !== "function")', source)
         self.assertIn('if (typeof Bun.ant.getPeerUid !== "function")', source)
-        # Must be installed before the CellSegmenter early return, or a runtime
-        # that ships CellSegmenter would skip the peer shims too.
-        self.assertLess(source.index("Bun.ant.getPeerUid = function"),
-                        source.index('if (typeof Bun.ant.CellSegmenter === "function") return;'))
+        # Its own module, so a runtime that ships CellSegmenter natively does
+        # not skip the peer shims through the CellSegmenter early return.
+        self.assertNotIn("CellSegmenter", source)
 
     def test_peer_credentials_read_the_other_process(self):
         candidates = [shutil.which("bun"), ROOT / "work" / "bun-android" / "bun"]
@@ -770,7 +805,7 @@ await child.exited;
 """
         with tempfile.TemporaryDirectory() as tmp:
             script = Path(tmp) / "peer.mjs"
-            script.write_text(POLYFILL.read_text() + "\n;\n" + harness)
+            script.write_text(assemble_runtime(tmp).read_text() + harness)
             proc = subprocess.run([bun, str(script), str(Path(tmp) / "peer.sock"), sys.executable],
                                   text=True, capture_output=True, timeout=30)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
@@ -782,8 +817,9 @@ await child.exited;
         self.assertIn("not a socket fd", result["bad"])
 
     def test_embeds_atomic_self_update(self):
-        source = POLYFILL.read_text()
-        self.assertIn('argv[ai] === "update" || argv[ai] === "upgrade"', source)
+        self.assertIn('argv[ai] === "update" || argv[ai] === "upgrade"',
+                      (RUNTIME / "20-self-update.js").read_text())
+        source = (RUNTIME / "20-self-update.js").read_text() + SELF_UPDATE.read_text()
         self.assertIn('claude-code-termux/releases/latest', source)
         self.assertIn('source_tag="$release_tag"', source)
         self.assertIn('built_hashes" != "$expected_hashes', source)
@@ -792,13 +828,11 @@ await child.exited;
         self.assertIn('updateArgs.indexOf("--force")', source)
 
     def test_embedded_update_shell_syntax(self):
-        source = POLYFILL.read_text()
-        script = source.split('var updateScript = String.raw`\n', 1)[1].split('\n`;', 1)[0]
-        proc = subprocess.run(["bash", "-n"], input=script, text=True, capture_output=True)
+        proc = subprocess.run(["bash", "-n", str(SELF_UPDATE)], text=True, capture_output=True)
         self.assertEqual(proc.returncode, 0, proc.stderr)
 
     def test_approved_manifest_requires_bionic_acceptance_and_matching_inputs(self):
-        source = POLYFILL.read_text()
+        source = SELF_UPDATE.read_text()
         script = source.split("python3 -c '\n", 1)[1].split(
             "\n' \"$latest\" \"$require_acceptance\"", 1
         )[0]
@@ -834,7 +868,7 @@ await child.exited;
             self.assertNotEqual(rejected.returncode, 0)
 
     def test_self_update_uses_termux_tmp_and_only_persists_bun(self):
-        source = POLYFILL.read_text()
+        source = SELF_UPDATE.read_text()
         self.assertIn('printenv TMPDIR', source)
         self.assertIn('$tmp_root/claude-code-termux-update.XXXXXX', source)
         self.assertIn('CLAUDE_CODE_TERMUX_SHARED_BUN_CACHE="$cache_root/bun-bases"', source)
@@ -844,7 +878,7 @@ await child.exited;
         self.assertNotIn('source_dir="$cache_root/claude-', source)
 
     def test_self_update_check_is_read_only(self):
-        source = POLYFILL.read_text()
+        source = SELF_UPDATE.read_text()
         check_exit = source.index('if [ "$check" = "1" ]')
         cache_root = source.index('cache_root="$cache_base/claude-code-termux/self-update"')
         tmp_dir = source.index('stage="$(mktemp -d "$tmp_root/')
@@ -852,7 +886,7 @@ await child.exited;
         self.assertLess(cache_root, tmp_dir)
 
     def test_legacy_claude_cache_cleanup_preserves_unrelated_paths(self):
-        source = POLYFILL.read_text()
+        source = SELF_UPDATE.read_text()
         marker = 'python3 - "$root" <<\'PY\'\n'
         script = source.split(marker, 1)[1].split("\nPY\n}", 1)[0]
         with tempfile.TemporaryDirectory() as tmp:
@@ -884,7 +918,7 @@ await child.exited;
         self.assertIn("4 removed", proc.stdout)
 
     def test_bun_cache_pruner_keeps_only_current_base_by_default(self):
-        source = POLYFILL.read_text()
+        source = SELF_UPDATE.read_text()
         marker = 'python3 - "$root/bun-bases" "$protected_sha" "$bun_keep" <<\'PY\'\n'
         script = source.split(marker, 1)[1].split("\nPY\n}", 1)[0]
         with tempfile.TemporaryDirectory() as tmp:
@@ -1054,7 +1088,7 @@ class BuildSmokeWiringTests(unittest.TestCase):
     def test_smoke_runs_without_external_preload(self):
         section = self.smoke_section()
         self.assertNotIn("BUN_OPTIONS=", section)
-        self.assertNotIn("--preload $POLYFILL", section)
+        self.assertNotIn("--preload", section)
         # The launcher forces both; the check is only faithful if it does too.
         self.assertIn("USE_BUILTIN_RIPGREP=0", section)
         self.assertIn("DISABLE_AUTOUPDATER=1", section)
