@@ -218,8 +218,11 @@ jobs:
             fi
           done
 
-          # Toolchain changes since the previous release, for the notes.
-          PREV="$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$GITHUB_SHA" 2>/dev/null || true)"
+          # Toolchain changes since the previous release, for the notes: the
+          # highest version tag this commit contains. Not `git describe`, which
+          # picks arbitrarily when two releases share a commit (a version with no
+          # toolchain change is cut from the same commit as the one before).
+          PREV="$(git tag -l 'v*' --merged "$GITHUB_SHA" | grep -vxF "$TAG" | sort -V | tail -1 || true)"
           if [ -n "$PREV" ]; then
             git log --oneline --no-decorate "$PREV..$GITHUB_SHA" -- . \
               ':(exclude)docs' ':(exclude)tests' ':(exclude)*.md' > changelog.txt

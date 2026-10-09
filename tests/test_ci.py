@@ -169,6 +169,12 @@ if {fail_first!r} and n == 0:
         self.assertIn("runtime: change the shim", notes)
         self.assertNotIn("docs: explain it", notes)
 
+    def test_predecessor_is_the_highest_release_on_a_shared_commit(self):
+        # Two releases from one commit, as when a Claude version ships with no
+        # toolchain change: the notes must name the newer one.
+        _, calls = self.publish(["v1.2.2", "v1.2.3"], "1.2.4", "v1.2.4")
+        self.assertIn("相对 `v1.2.3` 的工具链变更", calls[0]["notes"])
+
     def test_recut_of_an_older_version_does_not_take_latest(self):
         _, calls = self.publish(["v1.2.3", "v1.2.5"], "1.2.3", "v1.2.3-r1")
         self.assertIn("--latest=false", calls[0]["args"])
