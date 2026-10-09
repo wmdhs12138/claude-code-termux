@@ -9,7 +9,7 @@ pkg update -y
 apt_options=(-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
 pkg upgrade -y "${apt_options[@]}"
 pkg install -y "${apt_options[@]}" \
-  bash binutils coreutils curl file gawk git make python ripgrep sed tar unzip \
+  bash binutils coreutils curl file gawk git python ripgrep sed tar unzip \
   util-linux
 echo "::endgroup::"
 
@@ -18,7 +18,7 @@ cd "$ROOT"
 # host-side fixture tests here: several intentionally create conventional
 # /bin/sh and /usr/bin/env scripts, paths that a real Termux filesystem does
 # not provide. This container is reserved for the checks that need Bionic.
-SMOKE_SECONDS="${SMOKE_SECONDS:-10}" make build VERSION="$VERSION"
+SMOKE_SECONDS="${SMOKE_SECONDS:-10}" bash scripts/build.sh "$VERSION"
 
 ACTUAL_VERSION="$(python3 -c 'import json; print(json.load(open("dist/build-manifest.json"))["claude"])')"
 test "$ACTUAL_VERSION" = "$(tr -d '[:space:]' < work/.claude-version)"

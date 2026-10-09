@@ -12,7 +12,8 @@ BASE="https://downloads.claude.ai/claude-code-releases"
 # Standalone fetches share the build lock because work/.claude-version and the
 # downloaded binary are consumed as one pair by build.sh.
 if [ "${CLAUDE_CODE_TERMUX_LOCK_HELD:-0}" != "1" ]; then
-  exec 9>"$ROOT/.build.lock"
+  mkdir -p "$ROOT/work"
+  exec 9>"$ROOT/work/.build.lock"
   if ! flock -n 9; then
     echo "fetch-claude: another build or fetch is already running" >&2
     exit 1

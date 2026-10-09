@@ -78,7 +78,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Run regression tests
-        run: make test
+        run: python3 -m unittest discover -s tests -v
 
   bionic:
     needs: [resolve, tests]
@@ -164,27 +164,17 @@ jobs:
           name: build-reports
           path: reports
 
-      - name: Cut toolchain release if scripts/ or tools/ changed
+      - name: Cut toolchain release if the toolchain changed
         id: toolchain
         run: |
           set -euo pipefail
 
-          # Fingerprint = sha256 over the sorted per-file sha256 of the whole
-          # toolchain. Putting it in the tag makes the version stateless: if the
-          # bytes changed, no tag matches and a new release is cut; otherwise we
-          # skip. Nothing to remember to bump, so it cannot drift.
-          #
-          # git ls-files, not find: find also picks up stray untracked files
-          # (__pycache__ and friends), so the same commit would hash differently
-          # on a machine that had run the tools. `make fingerprint` prints the
-          # same number locally.
-          #
-          # .github/ is in the set because it decides what a release *says*: a
-          # change to the note generator that stayed outside the fingerprint
-          # would ship with no tag recording it.
-          TC_PATHS="install.sh scripts tools runtime .github"
-          TC_FP="$(git ls-files -z $TC_PATHS | sort -z \
-                    | xargs -0 sha256sum | sha256sum | cut -c1-7)"
+          # Putting the fingerprint in the tag makes the version stateless: if
+          # the bytes changed, no tag matches and a new release is cut;
+          # otherwise we skip. Nothing to remember to bump, so it cannot drift.
+          # scripts/fingerprint.sh is the only definition of what it covers.
+          TC_PATHS="$(scripts/fingerprint.sh --paths)"
+          TC_FP="$(scripts/fingerprint.sh)"
           echo "fingerprint: $TC_FP"
 
           TC_TAG="$(git tag -l "toolchain-v*-$TC_FP" | head -1)"
@@ -234,7 +224,6 @@ jobs:
 
           python3 .github/release_notes.py claude claude-notes.md \
             --manifest reports/dist/build-manifest.json \
-            --versions versions.json \
             --toolchain "${{ steps.toolchain.outputs.tag }}"
 
           # Credentials only. Every asset must be small text; the guard is what

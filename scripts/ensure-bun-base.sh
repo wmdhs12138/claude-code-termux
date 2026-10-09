@@ -38,11 +38,13 @@ trap 'rm -rf "$STAGE"' EXIT
 mkdir "$STAGE/base"
 
 # First run after upgrading can promote an already verified per-version Bun,
-# avoiding one final network download while old cache layouts age out.
+# avoiding one final network download while old cache layouts age out. The
+# last seed is a checkout's own pre-cache base (work/bun-android/bun).
 shopt -s nullglob
 for seed in \
   "$CACHE_ROOT"/../claude-*/work/bun-android/bun \
-  "$CACHE_ROOT"/../toolchain-*/work/bun-android/bun; do
+  "$CACHE_ROOT"/../toolchain-*/work/bun-android/bun \
+  "$CACHE_ROOT"/../bun-android/bun; do
   if [ -x "$seed" ] && [ "$(sha256sum "$seed" | cut -d' ' -f1)" = "$BINARY_SHA" ]; then
     cp -p "$seed" "$STAGE/base/bun"
     chmod 555 "$STAGE/base/bun"

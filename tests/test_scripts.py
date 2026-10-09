@@ -140,41 +140,26 @@ class VersionValidationTests(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0)
             self.assertFalse((root / "work" / ".claude-version").exists())
 
-    def test_failed_base_refresh_preserves_known_good_cache(self):
+    def test_refresh_base_refuses_a_build_that_cannot_execute(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            scripts = root / "scripts"
-            bun = root / "work" / "bun-android" / "bun"
-            scripts.mkdir(parents=True)
-            bun.parent.mkdir(parents=True)
-            shutil.copy2(BUILD, scripts / "build.sh")
-            bun.write_bytes(b"known-good-bun")
-            bun.chmod(0o755)
-            bun_sha = hashlib.sha256(bun.read_bytes()).hexdigest()
-            (root / "versions.json").write_text(
-                json.dumps(
-                    {
-                        "claude": "1.2.3",
-                        "claude_linux_arm64_sha256": "0" * 64,
-                        "base_bun": {
-                            "archive_sha256": "2" * 64,
-                            "binary_sha256": bun_sha,
-                        },
-                    }
-                )
-            )
-            env = dict(os.environ, REFRESH_BASE="1")
+            (root / "scripts").mkdir()
+            shutil.copy2(BUILD, root / "scripts" / "build.sh")
+            shutil.copy2(ROOT / "versions.json", root / "versions.json")
+            env = dict(os.environ, REFRESH_BASE="1", SKIP_RUN="1")
             proc = subprocess.run(
-                ["bash", str(scripts / "build.sh"), "1.2.3"],
-                text=True,
-                capture_output=True,
-                env=env,
+                ["bash", str(root / "scripts" / "build.sh"), "1.2.3"],
+                text=True, capture_output=True, env=env,
             )
-            self.assertNotEqual(proc.returncode, 0)
-            self.assertEqual(bun.read_bytes(), b"known-good-bun")
+            versions = (root / "versions.json").read_text()
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn("drop SKIP_RUN", proc.stderr)
+        self.assertEqual(versions, (ROOT / "versions.json").read_text())
 
     def test_default_bun_dependency_is_immutable_and_fully_locked(self):
         versions = json.loads((ROOT / "versions.json").read_text())
+        # An input file only: builds record what they did in dist/.
+        self.assertEqual(set(versions), {"base_bun"})
         base = versions["base_bun"]
         self.assertNotIn("/download/canary/", base["url"])
         self.assertRegex(base["archive_sha256"], r"^[0-9a-f]{64}$")
@@ -186,7 +171,8 @@ class VersionValidationTests(unittest.TestCase):
             scripts = root / "scripts"
             scripts.mkdir()
             shutil.copy2(FETCH, scripts / "fetch-claude.sh")
-            with open(root / ".build.lock", "w") as lock:
+            (root / "work").mkdir()
+            with open(root / "work" / ".build.lock", "w") as lock:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 proc = subprocess.run(
                     ["bash", str(scripts / "fetch-claude.sh"), "latest"],
@@ -196,56 +182,23 @@ class VersionValidationTests(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0)
             self.assertIn("already running", proc.stderr)
 
-    def test_interrupted_promotion_recovery_is_repeatable(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            scripts = root / "scripts"
-            dist = root / "dist"
-            evidence = root / "evidence"
-            scripts.mkdir()
-            dist.mkdir()
-            evidence.mkdir()
-            shutil.copy2(BUILD, scripts / "build.sh")
-            old_versions = json.dumps(
-                {
-                    "claude": "1.2.3",
-                    "claude_linux_arm64_sha256": "0" * 64,
-                    "base_bun": {
-                        "archive_sha256": "2" * 64,
-                        "binary_sha256": "1" * 64,
-                    },
-                }
-            )
-            files = (
-                (dist / "claude", dist / ".claude.before-promote", "old-bin"),
-                (
-                    dist / "build-manifest.json",
-                    dist / ".build-manifest.before-promote",
-                    "old-manifest",
-                ),
-                (root / "versions.json", root / ".versions.json.before-promote", old_versions),
-                (
-                    evidence / "build-manifest.json",
-                    evidence / ".build-manifest.before-promote",
-                    "old-evidence",
-                ),
-            )
-            for target, backup, old in files:
-                target.write_text("partly-new")
-                backup.write_text(old)
-            # Model a second interruption after one target was already restored:
-            # backups remain intact, so replaying recovery is safe.
-            files[0][0].write_text("old-bin")
-            (root / ".promotion-in-progress").write_text("1 1 1 1\n")
-            proc = subprocess.run(
-                ["bash", str(scripts / "build.sh"), "1.2.3"],
-                text=True,
-                capture_output=True,
-            )
-            self.assertNotEqual(proc.returncode, 0)
-            for target, _, old in files:
-                self.assertEqual(target.read_text(), old)
-            self.assertFalse((root / ".promotion-in-progress").exists())
+    def test_promotion_drops_the_old_manifest_before_replacing_the_binary(self):
+        script = BUILD.read_text()
+        drop = script.index('rm -f "$DIST/build-manifest.json"')
+        binary = script.index('mv -f "$CANDIDATE" "$DIST/claude"')
+        manifest = script.index('mv -f "$MANIFEST_NEW" "$DIST/build-manifest.json"')
+        self.assertLess(drop, binary)
+        self.assertLess(binary, manifest)
+
+    def test_build_writes_versions_json_only_for_an_accepted_refresh(self):
+        script = BUILD.read_text()
+        # Two uses: the pin read at the top and the write after promotion.
+        self.assertEqual(script.count('"$ROOT/versions.json"'), 2)
+        write = script.rindex('"$ROOT/versions.json"')
+        guard = script.rindex('if [ "$REFRESH_BASE" = "1" ]; then', 0, write)
+        self.assertNotIn("\nfi\n", script[guard:write])
+        self.assertGreater(guard, script.index('mv -f "$MANIFEST_NEW" "$DIST/build-manifest.json"'))
+        self.assertNotIn("evidence", script)
 
 
 class GraphAdaptationTests(unittest.TestCase):
@@ -428,34 +381,7 @@ class NativeAbiCheckTests(unittest.TestCase):
         self.assertEqual(report["consumer_modules"], ["/$bunfs/root/chunk-ink.js"])
 
 
-class UpdateEntryPointTests(unittest.TestCase):
-    def run_make_update(self, install_dir):
-        env = dict(os.environ)
-        env["CLAUDE_CODE_TERMUX_INSTALL_DIR"] = str(install_dir)
-        return subprocess.run(
-            ["make", "-s", "-f", str(ROOT / "Makefile"), "update"],
-            cwd=install_dir.parent, text=True, capture_output=True, env=env,
-        )
-
-    def test_make_update_runs_the_installed_embedded_updater(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            install_dir = Path(tmp) / "bin"
-            install_dir.mkdir()
-            claude = install_dir / "claude"
-            claude.write_text('#!/bin/sh\necho "claude args: $*"\n')
-            claude.chmod(0o755)
-            proc = self.run_make_update(install_dir)
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertEqual(proc.stdout.strip(), "claude args: update")
-
-    def test_make_update_requires_an_installed_claude(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            install_dir = Path(tmp) / "bin"
-            install_dir.mkdir()
-            proc = self.run_make_update(install_dir)
-        self.assertNotEqual(proc.returncode, 0)
-        self.assertIn("run ./install.sh", proc.stderr)
-
+class RetiredUpdateTests(unittest.TestCase):
     def test_retired_launcher_update_points_to_installer_without_building(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "project with spaces"
@@ -700,13 +626,6 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(backup_text, "#!/bin/sh\necho '1.0.0 (Claude Code)'\n")
         self.assertEqual(legacy_left, [False, False])
         self.assertTrue(unrelated_kept)
-
-    def test_make_install_no_longer_writes_a_launcher(self):
-        makefile = (ROOT / "Makefile").read_text()
-        section = makefile.split("install:\n", 1)[1].split("\nuninstall:", 1)[0]
-        self.assertIn("bash install.sh --no-build", section)
-        self.assertNotIn("launcher.sh", section)
-
 
 def assemble_runtime(out_dir):
     out = Path(out_dir) / "runtime.js"
@@ -1125,18 +1044,14 @@ class ReleaseNotesTests(unittest.TestCase):
             "output_sha256": "output-hash",
             "base_bun": {},
         }
-        versions = {
-            "claude": "9.8.6",
-            "claude_linux_arm64_sha256": "stale-source-hash",
-        }
-        notes = self.module.claude_notes(manifest, versions, "toolchain-test")
+        notes = self.module.claude_notes(manifest, "toolchain-test")
         self.assertIn("new-source-hash", notes)
-        self.assertNotIn("stale-source-hash", notes)
-        self.assertIn("make build VERSION=9.8.7", notes)
+        self.assertIn("output-hash", notes)
+        self.assertIn("scripts/build.sh 9.8.7", notes)
         self.assertIn("build-manifest.json", notes)
         self.assertNotIn("Graft 结构自检", notes)
 
-    def test_reports_bionic_execution_without_waiting_for_device_snapshot(self):
+    def test_reports_bionic_acceptance(self):
         manifest = {
             "claude": "9.8.7",
             "output_version": "9.8.7 (Claude Code)",
@@ -1150,7 +1065,7 @@ class ReleaseNotesTests(unittest.TestCase):
                 "tui_smoke": "pass",
             },
         }
-        notes = self.module.claude_notes(manifest, {}, "toolchain-test")
+        notes = self.module.claude_notes(manifest, "toolchain-test")
         self.assertIn("Bionic AArch64 直接运行、版本探针和 PTY/TUI 渲染通过", notes)
         self.assertNotIn("仅完成结构校验", notes)
 
@@ -1163,6 +1078,30 @@ class ReleaseNotesTests(unittest.TestCase):
         self.assertIn("Bun `1.4.3`", notes)
         self.assertNotIn("已发布过 release 的 Claude 版本", notes)
         self.assertLess(len(notes), 400)
+
+
+class FingerprintTests(unittest.TestCase):
+    FINGERPRINT = ROOT / "scripts" / "fingerprint.sh"
+
+    def test_prints_seven_hex_digits(self):
+        if not (ROOT / ".git").exists():
+            self.skipTest("not a git checkout")
+        proc = subprocess.run(["bash", str(self.FINGERPRINT)], text=True, capture_output=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertRegex(proc.stdout.strip(), r"^[0-9a-f]{7}$")
+
+    def test_covers_every_build_input(self):
+        proc = subprocess.run(["bash", str(self.FINGERPRINT), "--paths"],
+                              text=True, capture_output=True)
+        paths = proc.stdout.split()
+        for path in ("install.sh", "versions.json", "scripts", "tools", "runtime", ".github"):
+            self.assertIn(path, paths)
+
+    def test_ci_uses_the_script_instead_of_a_copy(self):
+        workflow = WORKFLOW.read_text()
+        self.assertIn('TC_FP="$(scripts/fingerprint.sh)"', workflow)
+        self.assertIn('TC_PATHS="$(scripts/fingerprint.sh --paths)"', workflow)
+        self.assertNotIn("git ls-files", workflow)
 
 
 class BionicCIWiringTests(unittest.TestCase):
@@ -1186,6 +1125,7 @@ class BionicCIWiringTests(unittest.TestCase):
 
     def test_bionic_path_executes_candidate_and_requires_tui(self):
         self.assertNotIn("SKIP_RUN", self.script)
+        self.assertIn('bash scripts/build.sh "$VERSION"', self.script)
         self.assertIn('./dist/claude --version', self.script)
         self.assertIn('smoke.get("ran") is True', self.script)
         self.assertIn('smoke.get("result") == "pass"', self.script)

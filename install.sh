@@ -15,7 +15,7 @@ The default/latest build uses the most recent Bionic-accepted Release.
 An explicit version number builds from this checkout.
 
 Options:
-  --no-build   Install an existing dist/claude (used by make install)
+  --no-build   Install the existing dist/claude without building
   -h, --help   Show this help
 
 Environment:

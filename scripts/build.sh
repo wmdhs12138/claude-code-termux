@@ -1,147 +1,84 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# Build claude: graft Claude Code's standalone module graph onto an
-# Android (bionic) Bun ELF. Zero glibc, no ptrace, no proot.
+# Build dist/claude: graft Claude Code's standalone module graph onto a Bionic
+# (Android) Bun ELF. Zero glibc, no ptrace, no proot.
 #
-# Usage: build.sh [VERSION|latest]
-# Env:   BUN_URL  override the pinned Android Bun base
+#   scripts/build.sh [VERSION|latest]
+#
+# Output: dist/claude and dist/build-manifest.json, replaced only after every
+# check below has passed. Downloads, intermediate graphs and reports stay in
+# work/. Nothing tracked by git is written, except versions.json on an explicit
+# REFRESH_BASE=1.
+#
+# Env:
+#   REFRESH_BASE=1 [BUN_URL=<zip>]  build with a new Bun base and, once every
+#                        check has passed, pin its hashes in versions.json
+#   CLAUDE_CODE_TERMUX_SHARED_BUN_CACHE
+#                        content-addressed Bun cache (default: work/bun-bases);
+#                        `claude update` shares one across toolchains
+#   SKIP_RUN=1           structural build only, where an aarch64 Bionic binary
+#                        cannot execute (no version probe, no TUI smoke)
+#   SMOKE_SECONDS=N      TUI smoke observation window (default 7)
+#
+# Contract: `claude update` (runtime/self-update.sh) and
+# scripts/install-approved.sh run this script from a downloaded toolchain tag,
+# then read dist/claude and the manifest fields claude,
+# claude_linux_arm64_sha256, base_bun.archive_sha256/binary_sha256 and
+# tui_smoke. Installed binaries depend on that: keep the entry point, the output
+# paths and those fields stable.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="${1:-latest}"
-BUN_URL="${BUN_URL:-https://github.com/wmdhs12138/bun/releases/download/bionic-v1.4.3-canary.1-5fce36ebb/bun-linux-aarch64-android-5fce36ebb6.zip}"
 REFRESH_BASE="${REFRESH_BASE:-0}"
 WORK="$ROOT/work"
 DIST="$ROOT/dist"
-mkdir -p "$WORK" "$DIST" "$ROOT/evidence"
+mkdir -p "$WORK" "$DIST"
 
 # Fixed staging paths are safe only when one build owns them. This also keeps
 # two simultaneous `claude update` processes from corrupting shared work files.
-exec 9>"$ROOT/.build.lock"
+exec 9>"$WORK/.build.lock"
 if ! flock -n 9; then
-  echo "build: another build is already running ($ROOT/.build.lock)" >&2
+  echo "build: another build is already running ($WORK/.build.lock)" >&2
   exit 1
 fi
 if [ "$REFRESH_BASE" != "0" ] && [ "$REFRESH_BASE" != "1" ]; then
   echo "build: REFRESH_BASE must be 0 or 1" >&2
   exit 2
 fi
-
-BINARY_BACKUP="$DIST/.claude.before-promote"
-MANIFEST_BACKUP="$DIST/.build-manifest.before-promote"
-VERSIONS_BACKUP="$ROOT/.versions.json.before-promote"
-EVIDENCE_BACKUP="$ROOT/evidence/.build-manifest.before-promote"
-PROMOTION_MARKER="$ROOT/.promotion-in-progress"
-
-# Recover the old complete generation before reading its lock file. A SIGKILL
-# cannot run traps, so the marker is the durable indication of an interrupted
-# multi-file promotion.
-if [ -e "$PROMOTION_MARKER" ]; then
-  read -r REC_BINARY REC_MANIFEST REC_VERSIONS REC_EVIDENCE < "$PROMOTION_MARKER" || {
-    echo "build: corrupt promotion marker; refusing unsafe recovery" >&2
-    exit 1
-  }
-  case "$REC_BINARY$REC_MANIFEST$REC_VERSIONS$REC_EVIDENCE" in
-    *[!01]*|?????*|???|??|?|"") echo "build: corrupt promotion marker; refusing unsafe recovery" >&2; exit 1 ;;
-  esac
-  if [ -e "$BINARY_BACKUP" ]; then cp -pf "$BINARY_BACKUP" "$DIST/claude"; elif [ "$REC_BINARY" = "0" ]; then rm -f "$DIST/claude"; fi
-  if [ -e "$MANIFEST_BACKUP" ]; then cp -pf "$MANIFEST_BACKUP" "$DIST/build-manifest.json"; elif [ "$REC_MANIFEST" = "0" ]; then rm -f "$DIST/build-manifest.json"; fi
-  if [ -e "$VERSIONS_BACKUP" ]; then cp -pf "$VERSIONS_BACKUP" "$ROOT/versions.json"; elif [ "$REC_VERSIONS" = "0" ]; then rm -f "$ROOT/versions.json"; fi
-  if [ -e "$EVIDENCE_BACKUP" ]; then cp -pf "$EVIDENCE_BACKUP" "$ROOT/evidence/build-manifest.json"; elif [ "$REC_EVIDENCE" = "0" ]; then rm -f "$ROOT/evidence/build-manifest.json"; fi
-  rm -f "$PROMOTION_MARKER"
+if [ "$REFRESH_BASE" = "1" ] && [ "${SKIP_RUN:-0}" = "1" ]; then
+  # A base is accepted only after the grafted candidate ran and rendered.
+  echo "build: REFRESH_BASE=1 needs a device that can execute the candidate; drop SKIP_RUN" >&2
+  exit 2
 fi
 
-# The checked-in lock is a security boundary, not optional build metadata.
-# Refuse malformed/missing values instead of silently replacing them later.
-read -r PINNED_CLAUDE_VER PINNED_CLAUDE_SHA PINNED_BUN_ARCHIVE_SHA PINNED_BUN_SHA < <(
+# versions.json pins the Bun base. It is a security boundary, not optional
+# build metadata: refuse malformed or missing values instead of guessing.
+read -r PIN_BUN_URL PIN_BUN_ARCHIVE_SHA PIN_BUN_SHA < <(
   python3 - "$ROOT/versions.json" <<'PY'
 import json, re, sys
 try:
     with open(sys.argv[1]) as f:
-        doc = json.load(f)
-    claude = doc["claude"]
-    claude_sha = doc["claude_linux_arm64_sha256"]
-    bun_archive_sha = doc["base_bun"]["archive_sha256"]
-    bun_sha = doc["base_bun"]["binary_sha256"]
+        base = json.load(f)["base_bun"]
+    url, archive_sha, binary_sha = base["url"], base["archive_sha256"], base["binary_sha256"]
 except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
     raise SystemExit(f"invalid versions.json: {exc}") from None
-if not isinstance(claude, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", claude):
-    raise SystemExit("versions.json has an invalid Claude version")
-for name, value in (("Claude", claude_sha), ("Bun archive", bun_archive_sha),
-                    ("Bun binary", bun_sha)):
+if not isinstance(url, str) or not re.fullmatch(r"https://\S+", url):
+    raise SystemExit("versions.json has an invalid Bun base URL")
+for name, value in (("Bun archive", archive_sha), ("Bun binary", binary_sha)):
     if not isinstance(value, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", value):
         raise SystemExit(f"versions.json has an invalid {name} sha256")
-print(claude, claude_sha.lower(), bun_archive_sha.lower(), bun_sha.lower())
+print(url, archive_sha.lower(), binary_sha.lower())
 PY
 )
-
-CANONICAL_BUN_DIR="$WORK/bun-android"
-CANONICAL_BUN_ZIP="$WORK/bun-android.zip"
-BASE_BACKUP_DIR="$WORK/.bun-android.before-refresh"
-
-# Recover deterministically if a previous process was killed during base-cache
-# promotion. Whichever directory matches the current lock is the known-good one.
-if [ -d "$BASE_BACKUP_DIR" ]; then
-  current_sha=""
-  backup_sha="$(sha256sum "$BASE_BACKUP_DIR/bun" 2>/dev/null | cut -d' ' -f1 || true)"
-  [ ! -x "$CANONICAL_BUN_DIR/bun" ] || current_sha="$(sha256sum "$CANONICAL_BUN_DIR/bun" | cut -d' ' -f1)"
-  if [ "$current_sha" = "$PINNED_BUN_SHA" ]; then
-    rm -rf "$BASE_BACKUP_DIR"
-  elif [ "$backup_sha" = "$PINNED_BUN_SHA" ]; then
-    rm -rf "$CANONICAL_BUN_DIR"
-    mv "$BASE_BACKUP_DIR" "$CANONICAL_BUN_DIR"
-  else
-    echo "build: cannot recover interrupted Bun cache promotion" >&2
-    exit 1
-  fi
-fi
-
-# A refresh downloads into a staging cache and leaves the known-good cache in
-# place until every build verification succeeds.
-if [ "$REFRESH_BASE" = "1" ]; then
-  BUN_DIR="$WORK/.bun-android.refresh"
-  BUN_ZIP="$WORK/.bun-android.refresh.zip"
-  rm -rf "$BUN_DIR" "$BUN_ZIP"
-else
-  BUN_DIR="$CANONICAL_BUN_DIR"
-  BUN_ZIP="$CANONICAL_BUN_ZIP"
-fi
-BASE_DOWNLOADED_THIS_RUN=0
-BUN_ARCHIVE_SHA="$PINNED_BUN_ARCHIVE_SHA"
-BASE_SWAPPED=0
-BASE_HAD_OLD=0
-PROMOTION_STARTED=0
-PROMOTION_COMMITTED=0
-HAD_OLD_BINARY=0
-HAD_OLD_MANIFEST=0
-HAD_OLD_VERSIONS=0
-HAD_OLD_EVIDENCE=0
+BUN_URL="${BUN_URL:-$PIN_BUN_URL}"
+BUN_CACHE="${CLAUDE_CODE_TERMUX_SHARED_BUN_CACHE:-$WORK/bun-bases}"
 
 CANDIDATE="$DIST/.claude.new"
 MANIFEST_NEW="$DIST/.build-manifest.new"
-VERSIONS_NEW="$ROOT/.versions.json.new"
-EVIDENCE_NEW="$ROOT/evidence/.build-manifest.new"
-BINARY_BACKUP="$DIST/.claude.before-promote"
-MANIFEST_BACKUP="$DIST/.build-manifest.before-promote"
-VERSIONS_BACKUP="$ROOT/.versions.json.before-promote"
-EVIDENCE_BACKUP="$ROOT/evidence/.build-manifest.before-promote"
-PROMOTION_MARKER="$ROOT/.promotion-in-progress"
-rm -f "$MANIFEST_NEW" "$VERSIONS_NEW" "$EVIDENCE_NEW" "$PROMOTION_MARKER.new" \
-      "$BINARY_BACKUP" "$MANIFEST_BACKUP" "$VERSIONS_BACKUP" "$EVIDENCE_BACKUP"
-
+REFRESH_STAGE=""
 cleanup() {
-  if [ "$PROMOTION_STARTED" = "1" ] && [ "$PROMOTION_COMMITTED" != "1" ]; then
-    if [ -e "$BINARY_BACKUP" ]; then cp -pf "$BINARY_BACKUP" "$DIST/claude"; elif [ "$HAD_OLD_BINARY" = "0" ]; then rm -f "$DIST/claude"; fi
-    if [ -e "$MANIFEST_BACKUP" ]; then cp -pf "$MANIFEST_BACKUP" "$DIST/build-manifest.json"; elif [ "$HAD_OLD_MANIFEST" = "0" ]; then rm -f "$DIST/build-manifest.json"; fi
-    if [ -e "$VERSIONS_BACKUP" ]; then cp -pf "$VERSIONS_BACKUP" "$ROOT/versions.json"; elif [ "$HAD_OLD_VERSIONS" = "0" ]; then rm -f "$ROOT/versions.json"; fi
-    if [ -e "$EVIDENCE_BACKUP" ]; then cp -pf "$EVIDENCE_BACKUP" "$ROOT/evidence/build-manifest.json"; elif [ "$HAD_OLD_EVIDENCE" = "0" ]; then rm -f "$ROOT/evidence/build-manifest.json"; fi
-    rm -f "$PROMOTION_MARKER"
-    rm -f "$BINARY_BACKUP" "$MANIFEST_BACKUP" "$VERSIONS_BACKUP" "$EVIDENCE_BACKUP"
-  fi
-  if [ "$BASE_SWAPPED" = "1" ] && [ "$PROMOTION_COMMITTED" != "1" ]; then
-    rm -rf "$CANONICAL_BUN_DIR"
-    if [ "$BASE_HAD_OLD" = "1" ]; then mv "$BASE_BACKUP_DIR" "$CANONICAL_BUN_DIR"; fi
-  fi
-  if [ "$REFRESH_BASE" = "1" ]; then rm -rf "$BUN_DIR" "$BUN_ZIP"; fi
+  rm -f "$MANIFEST_NEW"
+  if [ -n "$REFRESH_STAGE" ]; then rm -rf "$REFRESH_STAGE"; fi
 }
 trap cleanup EXIT
 
@@ -150,7 +87,7 @@ export CLAUDE_CODE_TERMUX_LOCK_HELD=1
 
 fail_before_promote() {
   echo "build: $1" >&2
-  echo "build: $DIST/claude and its metadata were left unchanged" >&2
+  echo "build: $DIST/claude and its manifest were left unchanged" >&2
   exit 1
 }
 
@@ -161,59 +98,46 @@ die_kept() {
   echo "build: $1" >&2
   echo "build: $DIST/claude was left exactly as it was; a failed build never" >&2
   echo "build: replaces it. The candidate is at $CANDIDATE" >&2
-  echo "build: To fall back to a known-good version: make build VERSION=<version>" >&2
+  echo "build: To fall back to a known-good version: scripts/build.sh <version>" >&2
   exit 1
 }
 
-# 1. official Claude Code linux-arm64 binary (checksum-verified)
+# 1. official Claude Code linux-arm64 binary (checksum-verified against
+#    Anthropic's release manifest by fetch-claude.sh)
 CLAUDE_BIN="$(bash "$ROOT/scripts/fetch-claude.sh" "$VERSION" "$WORK")"
 VER="$(cat "$WORK/.claude-version")"
 CLAUDE_SHA="$(sha256sum "$CLAUDE_BIN" | cut -d' ' -f1)"
-if [ "$VER" = "$PINNED_CLAUDE_VER" ] && [ -n "$PINNED_CLAUDE_SHA" ] \
-   && [ "$CLAUDE_SHA" != "$PINNED_CLAUDE_SHA" ]; then
-  fail_before_promote "Claude $VER hash differs from versions.json (expected $PINNED_CLAUDE_SHA, got $CLAUDE_SHA)"
-fi
 
-# 2. Android Bun base (bionic ELF)
-SHARED_BUN_CACHE="${CLAUDE_CODE_TERMUX_SHARED_BUN_CACHE:-}"
-if [ -n "$SHARED_BUN_CACHE" ] && [ "$REFRESH_BASE" = "0" ]; then
-  BUN="$(bash "$ROOT/scripts/ensure-bun-base.sh" \
-    "$SHARED_BUN_CACHE" "$BUN_URL" "$PINNED_BUN_ARCHIVE_SHA" "$PINNED_BUN_SHA" \
-    "$ROOT/scripts/compact-progress.py")"
-else
-  BUN="$BUN_DIR/bun"
-fi
-if [ ! -x "$BUN" ]; then
-  echo "build: fetching Android Bun base..." >&2
+# 2. Android Bun base (Bionic ELF), content-addressed by its SHA-256 in
+#    $BUN_CACHE. A refresh hashes the candidate first and feeds the same cache,
+#    so the pinned base is never touched and a failed refresh changes nothing.
+if [ "$REFRESH_BASE" = "1" ]; then
+  REFRESH_STAGE="$(mktemp -d "$WORK/.bun-refresh.XXXXXX")"
+  echo "build: downloading candidate Bun base $BUN_URL" >&2
   if [ -t 2 ]; then
-    curl -fL --show-error --progress-bar --retry 3 -o "$BUN_ZIP" "$BUN_URL" \
+    curl -fL --show-error --progress-bar --retry 3 -o "$REFRESH_STAGE/bun.zip" "$BUN_URL" \
       2>&1 | python3 "$ROOT/scripts/compact-progress.py"
   else
-    curl -fsSL --retry 3 -o "$BUN_ZIP" "$BUN_URL"
+    curl -fsSL --retry 3 -o "$REFRESH_STAGE/bun.zip" "$BUN_URL"
   fi
-  BUN_ARCHIVE_SHA="$(sha256sum "$BUN_ZIP" | cut -d' ' -f1)"
-  if [ "$BUN_ARCHIVE_SHA" != "$PINNED_BUN_ARCHIVE_SHA" ] \
-     && [ "$REFRESH_BASE" != "1" ]; then
-    fail_before_promote "base Bun archive hash differs from versions.json (expected $PINNED_BUN_ARCHIVE_SHA, got $BUN_ARCHIVE_SHA)"
-  fi
-  rm -rf "$BUN_DIR" "$BUN_ZIP.d"
-  mkdir -p "$BUN_DIR"
-  unzip -o -j "$BUN_ZIP" "*/bun" -d "$BUN_DIR" >/dev/null
-  chmod +x "$BUN"
-  BASE_DOWNLOADED_THIS_RUN=1
-  echo "build: Android Bun download verified" >&2
-fi
-BUN_SHA="$(sha256sum "$BUN" | cut -d' ' -f1)"
-if [ "$BUN_SHA" != "$PINNED_BUN_SHA" ]; then
-  if [ "$REFRESH_BASE" != "1" ] || [ "$BASE_DOWNLOADED_THIS_RUN" != "1" ]; then
-    fail_before_promote "base Bun hash differs from versions.json (expected $PINNED_BUN_SHA, got $BUN_SHA); run 'make refresh-base' to download, validate and accept it explicitly"
-  fi
+  unzip -o -j "$REFRESH_STAGE/bun.zip" "*/bun" -d "$REFRESH_STAGE" >/dev/null
+  BUN_ARCHIVE_SHA="$(sha256sum "$REFRESH_STAGE/bun.zip" | cut -d' ' -f1)"
+  BUN_SHA="$(sha256sum "$REFRESH_STAGE/bun" | cut -d' ' -f1)"
   echo "build: base Bun refresh explicitly allowed" >&2
-  echo "       pinned=$PINNED_BUN_SHA" >&2
+  echo "       pinned=$PIN_BUN_SHA" >&2
   echo "       actual=$BUN_SHA" >&2
+  BUN_SOURCE="file://$REFRESH_STAGE/bun.zip"
+else
+  BUN_ARCHIVE_SHA="$PIN_BUN_ARCHIVE_SHA"
+  BUN_SHA="$PIN_BUN_SHA"
+  BUN_SOURCE="$BUN_URL"
+fi
+if ! BUN="$(bash "$ROOT/scripts/ensure-bun-base.sh" "$BUN_CACHE" "$BUN_SOURCE" \
+            "$BUN_ARCHIVE_SHA" "$BUN_SHA" "$ROOT/scripts/compact-progress.py")"; then
+  fail_before_promote "could not provide the Bun base pinned in versions.json; to accept a different base run REFRESH_BASE=1 BUN_URL=<zip> scripts/build.sh"
 fi
 if [ "${SKIP_RUN:-0}" = "1" ]; then
-  # x64 CI: cannot execute the aarch64 base, read the version string instead.
+  # Cannot execute the aarch64 base here, so read the version string instead.
   # Prefer the full revision form ("Bun v1.4.3-canary.1+86771d09f"): a bare
   # "Bun v1.4.3" also occurs earlier in the binary, and taking the leftmost
   # match would drop the canary identity that --revision reports on a device.
@@ -336,9 +260,8 @@ with open(path, "w") as f:
     f.write("\n")
 PY
 
-# 6. Prepare every tracked credential before replacing the working binary.
-# Cross-file atomicity is impossible, but this makes post-promotion failures a
-# tiny sequence of local renames rather than JSON generation or disk writes.
+# 6. Write the manifest beside the candidate before anything is replaced, so
+#    promotion is two local renames.
 OUT_SHA="$(sha256sum "$CANDIDATE" | cut -d' ' -f1)"
 OUT_SIZE="$(stat -c%s "$CANDIDATE")"
 GRAPH_SHA="$(sha256sum "$GRAPH_ADAPTED" | cut -d' ' -f1)"
@@ -367,11 +290,12 @@ doc = {
     # What the structural check verified about this exact artifact (step 5).
     "graft": load(graft_path),
     # The native Ink surface this graph used and runtime/40-cell-segmenter.js
-    # was checked against (step 3a), so an ABI change is visible in the release credential.
+    # was checked against (step 3a), so an ABI change is visible in the
+    # release credential.
     "native_abi": load(abi_path),
     # Whether this exact artifact actually rendered a frame (step 5b). False on
-    # an x64 CI build, which cannot execute the aarch64 binary at all -- so read
-    # it together with base_bun/device, never as "the TUI was verified".
+    # a SKIP_RUN build, which never executed the binary -- never read it as
+    # "the TUI was verified" without checking "ran".
     "tui_smoke": load(smoke_path),
     "base_bun": {
         "version": bun_ver,
@@ -384,92 +308,29 @@ doc = {
 with open(path, "w") as f:
     json.dump(doc, f, indent=2)
     f.write("\n")
-print(path)
 PY
-# 7. Prepare versions.json (the checked-in record) beside the old file. Build
-#    facts are always written; device fields are written only after execution
-#    on this device (SKIP_RUN builds record null instead of stale claims).
-DEVICE=""
-VERIFIED_ON=""
-if [ "${SKIP_RUN:-0}" != "1" ]; then
-  REL="$(getprop ro.build.version.release 2>/dev/null || true)"
-  ARCH="$(uname -m)"
-  if [ -n "$REL" ]; then DEVICE="Android $REL / $ARCH"; else DEVICE="$(uname -s) / $ARCH"; fi
-  VERIFIED_ON="$(date -u +%Y-%m-%d)"
-fi
-python3 - "$ROOT/versions.json" "$VERSIONS_NEW" "$VER" "$CLAUDE_SHA" "$BUN_VER" \
-        "$BUN_ARCHIVE_SHA" "$BUN_SHA" "$OUT_SHA" "$OUT_SIZE" "$GRAPH_SHA" "$DEVICE" \
-        "$VERIFIED_ON" "$BUN_URL" "$WORK/adapt-report.json" "$WORK/runtime.json" <<'PY'
-import json, sys
-(source_path, path, ver, claude_sha, bun_ver, bun_archive_sha, bun_sha,
- out_sha, out_size, graph_sha, device, verified_on, bun_url,
- adapt_path, runtime_path) = sys.argv[1:16]
-try:
-    doc = json.load(open(source_path))
-except (OSError, ValueError):
-    doc = {}
-doc["claude"] = ver
-doc["claude_linux_arm64_sha256"] = claude_sha
-bun = doc.setdefault("base_bun", {})
-bun["version"] = bun_ver
-bun["archive_sha256"] = bun_archive_sha
-bun["binary_sha256"] = bun_sha
-bun["url"] = bun_url
-bun["note"] = "self-built immutable Bun bionic release; update only after Android build and direct-exec smoke verification"
-doc["verified_output"] = {
-    "file": "dist/claude",
-    "sha256": out_sha,
-    "size": int(out_size),
-    "graph_sha256": graph_sha,
-    "adaptations": json.load(open(adapt_path))["adaptations"] + json.load(open(runtime_path))["adaptations"],
-    # verified_on = the built binary was executed here and reported the
-    # expected version (build.sh step 5). Deeper checks (TUI, tools) stay manual.
-    "device": device or None,
-    "verified_on": verified_on or None,
-}
-with open(path, "w") as f:
-    json.dump(doc, f, indent=2)
-    f.write("\n")
-print("build: versions.json prepared" + (
-    f" (executed on {device}, {verified_on})" if device else " (device fields null: SKIP_RUN)"), file=sys.stderr)
-PY
-cp -f "$MANIFEST_NEW" "$EVIDENCE_NEW"
 
-# 8. All expensive work and file generation succeeded. Record which old files
-# exist, then rename them aside. The durable state makes both forward promotion
-# and repeated crash recovery safe without duplicating the ~225 MB binary.
-[ ! -e "$DIST/claude" ] || HAD_OLD_BINARY=1
-[ ! -e "$DIST/build-manifest.json" ] || HAD_OLD_MANIFEST=1
-[ ! -e "$ROOT/versions.json" ] || HAD_OLD_VERSIONS=1
-[ ! -e "$ROOT/evidence/build-manifest.json" ] || HAD_OLD_EVIDENCE=1
-printf '%s %s %s %s\n' "$HAD_OLD_BINARY" "$HAD_OLD_MANIFEST" \
-  "$HAD_OLD_VERSIONS" "$HAD_OLD_EVIDENCE" > "$PROMOTION_MARKER.new"
-mv -f "$PROMOTION_MARKER.new" "$PROMOTION_MARKER"
-PROMOTION_STARTED=1
-if [ "$HAD_OLD_BINARY" = "1" ]; then mv "$DIST/claude" "$BINARY_BACKUP"; fi
-if [ "$HAD_OLD_MANIFEST" = "1" ]; then mv "$DIST/build-manifest.json" "$MANIFEST_BACKUP"; fi
-if [ "$HAD_OLD_VERSIONS" = "1" ]; then mv "$ROOT/versions.json" "$VERSIONS_BACKUP"; fi
-if [ "$HAD_OLD_EVIDENCE" = "1" ]; then mv "$ROOT/evidence/build-manifest.json" "$EVIDENCE_BACKUP"; fi
-
-if [ "$REFRESH_BASE" = "1" ]; then
-  if [ -d "$CANONICAL_BUN_DIR" ]; then
-    mv "$CANONICAL_BUN_DIR" "$BASE_BACKUP_DIR"
-    BASE_HAD_OLD=1
-  fi
-  BASE_SWAPPED=1
-  mv "$BUN_DIR" "$CANONICAL_BUN_DIR"
-fi
-
+# 7. Promote. The old manifest goes first: an interruption between the renames
+#    then leaves a binary without a manifest, never one paired with the
+#    manifest of a different build.
+rm -f "$DIST/build-manifest.json"
 mv -f "$CANDIDATE" "$DIST/claude"
 mv -f "$MANIFEST_NEW" "$DIST/build-manifest.json"
-mv -f "$VERSIONS_NEW" "$ROOT/versions.json"
-mv -f "$EVIDENCE_NEW" "$ROOT/evidence/build-manifest.json"
-rm -f "$PROMOTION_MARKER"
-PROMOTION_COMMITTED=1
-rm -f "$BINARY_BACKUP" "$MANIFEST_BACKUP" "$VERSIONS_BACKUP" "$EVIDENCE_BACKUP"
-rm -rf "$BASE_BACKUP_DIR"
+
+# 8. An accepted base refresh is the one write to a tracked file.
 if [ "$REFRESH_BASE" = "1" ]; then
-  rm -f "$CANONICAL_BUN_ZIP"
-  mv "$BUN_ZIP" "$CANONICAL_BUN_ZIP"
+  python3 - "$ROOT/versions.json" "$BUN_VER" "$BUN_URL" "$BUN_ARCHIVE_SHA" "$BUN_SHA" <<'PY'
+import json, os, sys
+path, version, url, archive_sha, binary_sha = sys.argv[1:6]
+with open(path) as f:
+    doc = json.load(f)
+doc["base_bun"] = {"version": version, "url": url,
+                   "archive_sha256": archive_sha, "binary_sha256": binary_sha}
+with open(path + ".new", "w") as f:
+    json.dump(doc, f, indent=2)
+    f.write("\n")
+os.replace(path + ".new", path)
+PY
+  echo "build: versions.json now pins Bun base ${BUN_SHA:0:12} ($BUN_VER)" >&2
 fi
 echo "build: OK claude=$OUT_VER base-bun=$BUN_VER -> $DIST/claude"
