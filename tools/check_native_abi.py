@@ -10,9 +10,10 @@ render and shows a blank terminal -- usually discovered by a user, not by CI.
 Scanning the extracted graph makes that a build failure instead.
 
 Checks:
-  * Bun.ant.* reads stay inside the known set. getPeerPid/getPeerUid/
-    memoryPressureLevel/setDumpable are optional probes that degrade by
-    themselves on runtimes that lack them.
+  * Bun.ant.* reads stay inside the known set. The polyfill also provides
+    getPeerPid/getPeerUid (SO_PEERCRED via bun:ffi) for cross-session
+    messaging. memoryPressureLevel/setDumpable are optional probes that
+    degrade by themselves on runtimes that lack them.
   * Modules that construct Bun.ant.CellSegmenter, together with the modules
     that import the factory wrapping that constructor, only call the native
     members the polyfill implements, and still call every member it relies on.

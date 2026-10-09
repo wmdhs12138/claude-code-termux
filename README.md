@@ -66,6 +66,7 @@ official Claude Code linux-arm64
       apply Termux compatibility
        ├─ disable bfs/ugrep shadowing
        ├─ provide Bun.ant.CellSegmenter
+       ├─ provide Bun.ant.getPeerPid/getPeerUid
        ├─ embed Android runtime defaults
        └─ embed the Bionic updater
                 │ graph graft

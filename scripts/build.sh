@@ -363,7 +363,7 @@ doc = {
     "graph_sha256": graph_sha,
     # Read from the adaptation run itself, never a hardcoded list: a credential
     # that understates what the build did is worse than no credential.
-    "adaptations": load(adapt_path)["adaptations"] + ["embedded_cellsegmenter"],
+    "adaptations": load(adapt_path)["adaptations"] + ["embedded_cellsegmenter", "embedded_peer_credentials"],
     "embedded_preload": load(embed_path),
     # What the structural check verified about this exact artifact (step 5).
     "graft": load(graft_path),
@@ -422,7 +422,7 @@ doc["verified_output"] = {
     "sha256": out_sha,
     "size": int(out_size),
     "graph_sha256": graph_sha,
-    "adaptations": json.load(open(adapt_path))["adaptations"] + ["embedded_cellsegmenter"],
+    "adaptations": json.load(open(adapt_path))["adaptations"] + ["embedded_cellsegmenter", "embedded_peer_credentials"],
     # verified_on = the built binary was executed here and reported the
     # expected version (build.sh step 5). Deeper checks (TUI, tools) stay manual.
     "device": device or None,

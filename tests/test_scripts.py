@@ -728,6 +728,59 @@ class CellSegmenterPolyfillTests(unittest.TestCase):
         self.assertIn('process.env.USE_BUILTIN_RIPGREP === undefined', source)
         self.assertIn('process.env.DISABLE_AUTOUPDATER === undefined', source)
 
+    def test_provides_peer_credentials_without_overriding_native(self):
+        source = POLYFILL.read_text()
+        self.assertIn('process.getBuiltinModule("bun:ffi")', source)
+        self.assertIn("var SO_PEERCRED = 17;", source)
+        self.assertIn('if (typeof Bun.ant.getPeerPid !== "function")', source)
+        self.assertIn('if (typeof Bun.ant.getPeerUid !== "function")', source)
+        # Must be installed before the CellSegmenter early return, or a runtime
+        # that ships CellSegmenter would skip the peer shims too.
+        self.assertLess(source.index("Bun.ant.getPeerUid = function"),
+                        source.index('if (typeof Bun.ant.CellSegmenter === "function") return;'))
+
+    def test_peer_credentials_read_the_other_process(self):
+        candidates = [shutil.which("bun"), ROOT / "work" / "bun-android" / "bun"]
+        cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+        candidates += sorted(cache.glob("claude-code-termux/self-update/bun-bases/bun-*/bun"))
+        bun = next((str(c) for c in candidates if c and os.access(c, os.X_OK)), None)
+        if bun is None:
+            self.skipTest("no Bun runtime available")
+        harness = r"""
+import { connect } from "net";
+if (process.platform !== "android") { console.log("SKIP"); process.exit(0); }
+const path = process.argv[2];
+const child = Bun.spawn([process.argv[3], "-c", `
+import os, socket, sys
+s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(1)
+print("ready", flush=True)
+c, _ = s.accept(); c.recv(1)
+`, path], { stdout: "pipe" });
+await child.stdout.getReader().read();
+const c = connect({ path });
+c.on("connect", () => {
+  const fd = c._handle.fd;
+  let bad;
+  try { Bun.ant.getPeerUid(-1); } catch (e) { bad = e.message; }
+  console.log(JSON.stringify({ pid: Bun.ant.getPeerPid(fd), uid: Bun.ant.getPeerUid(fd),
+                               child: child.pid, self: process.getuid(), bad }));
+  c.end("x");
+});
+await child.exited;
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / "peer.mjs"
+            script.write_text(POLYFILL.read_text() + "\n;\n" + harness)
+            proc = subprocess.run([bun, str(script), str(Path(tmp) / "peer.sock"), sys.executable],
+                                  text=True, capture_output=True, timeout=30)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        if proc.stdout.strip() == "SKIP":
+            self.skipTest("Bun runtime is not Android")
+        result = json.loads(proc.stdout)
+        self.assertEqual(result["pid"], result["child"])
+        self.assertEqual(result["uid"], result["self"])
+        self.assertIn("not a socket fd", result["bad"])
+
     def test_embeds_atomic_self_update(self):
         source = POLYFILL.read_text()
         self.assertIn('argv[ai] === "update" || argv[ai] === "upgrade"', source)

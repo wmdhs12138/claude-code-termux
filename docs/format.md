@@ -142,6 +142,12 @@ find () { ... ( exec -a bfs   "$_cc_bin" -S dfs ... ) }
 所有 graph-relative `StringPointer` 和 Offsets，并清零 entry 的 bytecode/module-info/origin。
 最终 ELF 因而无需 `BUN_OPTIONS=--preload` 或旁路 JS 文件，可直接执行并渲染首屏。
 
+同一段代码还在 Android 上补齐 `Bun.ant.getPeerPid(fd)` / `getPeerUid(fd)`：首次调用时用
+`bun:ffi` 打开 Bionic `libc.so`，以 `getsockopt(fd, SOL_SOCKET, SO_PEERCRED)` 读取对端
+`struct ucred`。跨会话消息（SendMessage、回执、idle 通知）在写入本地 socket 前要求这两项都
+能读出，否则以 `endpoint-unverifiable` 拒发。`memoryPressureLevel()` 不补：Claude 只在 macOS
+分支调用它，Linux 分支用 `os.freemem()`，Bun 在 Android 上取的就是 `MemAvailable`。
+
 ## 6. 证据
 
 - `evidence/sha256.txt`：官方二进制校验
