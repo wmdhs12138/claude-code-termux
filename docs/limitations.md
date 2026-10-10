@@ -20,9 +20,9 @@
 
 | 方面 | 差异 |
 | --- | --- |
-| 运行时 | 公版 Bun 1.4.3-canary 的 Bionic 构建，不是 Anthropic 私有的 bun-internal。私有的 `Bun.ant` 接口只补了 Claude 在这里会用到的三个（`CellSegmenter`、`getPeerPid`、`getPeerUid`），见 [adaptations.md](adaptations.md)。 |
+| 运行时 | Bun 官方 1.4.3 的 Android（Bionic）构建，不是 Anthropic 私有的 bun-internal。私有的 `Bun.ant` 接口只补了 Claude 在这里会用到的三个（`CellSegmenter`、`getPeerPid`、`getPeerUid`），见 [adaptations.md](adaptations.md)。 |
 | TUI 渲染 | `CellSegmenter` 是纯 JS 实现，看不出和桌面版的差别。它只解析粗体、暗淡、斜体、下划线、反色、删除线和 16 / 256 / 真彩色，但 Claude 在交给渲染器之前就把 ANSI 转成了自己的样式模型，闪烁、隐藏、上划线、下划线颜色和样式在那一步已经丢掉（桌面版同样如此）：让实现多认这些样式，Bash 输出和状态栏写到终端的样式序列也完全相同。整屏 120×40 重绘约 4.6 ms，单行变化约 0.09 ms。 |
-| 字节码 | 官方模块图里的字节码不被采用，所有模块都从内嵌源码解析。官方运行时基于 WebKit `35e8970`，这里的 Bun 底座是 `cf1b36e`，JavaScriptCore 版本不同；去掉全部字节码前后，首帧都是约 1.3 s，`--help` 约 0.85 s。 |
+| 字节码 | 官方模块图里的字节码不被采用，所有模块都从内嵌源码解析。官方运行时基于 WebKit `35e8970`，这里的 Bun 底座是 `0c06faa`，JavaScriptCore 版本不同；去掉全部字节码前后，首帧都是约 1.3 s，`--help` 约 0.85 s。 |
 | 搜索 | Bash 里的 `grep`、`find` 是 Termux 的 GNU 版本，不是内嵌的 ugrep、bfs，选项和输出格式可能略有不同；Grep / Glob 工具用 Termux 的 `ripgrep`。 |
 | 低内存判断 | 走 Linux 分支的 `os.freemem()`，Bun 取的是 `MemAvailable`，结果准确。`/proc/pressure/memory` 对应用不可读。 |
 | 更新 | 只跟随本项目 CI 验收过的 Release，最多晚一天，并且每次在手机上本地构建。 |

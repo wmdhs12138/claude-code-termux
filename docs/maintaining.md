@@ -33,8 +33,8 @@ scripts/build.sh 2.1.295                 # 官方二进制和 Bun 底座都缓�
 
 ## 更换 Bun 底座
 
-底座是 [wmdhs12138/bun](https://github.com/wmdhs12138/bun) 发布的 Bionic 构建，`versions.json` 按 URL 和
-SHA-256 锁定。评估新底座必须在物理设备上进行：
+底座是 Bun 官方 Release 里的 `bun-linux-aarch64-android.zip`（1.4.3 起官方发布 Android Bionic 构建），
+`versions.json` 按 URL 和 SHA-256 锁定。评估新底座必须在物理设备上进行：
 
 ```bash
 REFRESH_BASE=1 BUN_URL=<候选 zip 的 URL> scripts/build.sh latest
@@ -85,6 +85,10 @@ REFRESH_BASE=1 BUN_URL=<候选 zip 的 URL> scripts/build.sh latest
 - **同一份模块图换个 Bun 版本可能直接段错误。** 1.4.2 不认识 1.4.3 新增的 flag bit 11/12 及其布局，读到
   `0x40` 就崩。Bun ≥ 1.4 的 `BUN_COMPILED.size` 是不带重定位的 payload 虚拟地址（plain-offset），≤ 1.3 是要
   重定位的绝对指针，混用会在初始化前段错误（`tools/revive_patch.py` 按底座版本自动选择）。
+- **底座文件尾巴会落进 `.bss`。** 嫁接要扩展可写 PT_LOAD 的 `p_filesz`，底座原本放在段尾之后的非加载内容
+  （`.symtab`、`.strtab`、节头表）就会被映射成 `.bss` 的初值。官方 1.4.3 在那里留了约 70 KiB 符号，嫁接后启动
+  1 ms 内在 `0x0` 段错误；而 Bun 自己的 `--compile` 能跑，因为它会把这段清零。`tools/revive_patch.py` 现在把
+  这段搬到文件末尾并原地清零。旧的 fork 底座同样有这段非零字节，之前没出事只是碰巧。
 - **字节码版本不符不会报错**，JSC 会回退到解析内嵌源码。所以改了源码的模块必须清零它的 bytecode 指针，
   否则补丁不生效。
 - **2.1.271 起渲染依赖 `Bun.ant.CellSegmenter`。** 缺失时渲染器在第一帧抛错，用户看到的只是一片空白的终端，

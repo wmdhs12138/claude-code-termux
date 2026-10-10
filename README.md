@@ -8,7 +8,7 @@ shell launcher 或外部 preload。
 
 [![Claude Code](https://img.shields.io/github/v/release/wmdhs12138/claude-code-termux?display_name=tag&filter=v*&sort=semver&label=Claude%20Code&color=blue)](https://github.com/wmdhs12138/claude-code-termux/releases/latest)
 [![build](https://github.com/wmdhs12138/claude-code-termux/actions/workflows/build.yml/badge.svg)](https://github.com/wmdhs12138/claude-code-termux/actions/workflows/build.yml)
-[![Bun Bionic](https://github.com/wmdhs12138/bun/actions/workflows/bionic-aarch64.yml/badge.svg)](https://github.com/wmdhs12138/bun/actions/workflows/bionic-aarch64.yml)
+[![Bun](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fwmdhs12138%2Fclaude-code-termux%2Fmain%2Fversions.json&query=%24.base_bun.version&label=Bun&color=black)](https://github.com/oven-sh/bun/releases)
 
 ## 安装
 

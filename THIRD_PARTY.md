@@ -6,8 +6,8 @@ License (see [LICENSE](LICENSE)). It contains no Anthropic code and publishes no
 | Component | License | Notes |
 | --- | --- | --- |
 | [Claude Code](https://github.com/anthropics/claude-code) | Proprietary (Anthropic) | Downloaded by `scripts/build.sh` from Anthropic's CDN on the user's device, checksum-verified against Anthropic's release manifest and modified locally. The resulting ELF is a modified copy of a proprietary program for personal use only and must not be redistributed. CI builds it in a read-only job and releases carry text credentials only. |
-| [Bun](https://github.com/oven-sh/bun) | MIT | The Bionic AArch64 build published by [wmdhs12138/bun](https://github.com/wmdhs12138/bun), pinned by SHA-256 in `versions.json` and downloaded at build time. |
-| `tools/revive_patch.py` | MIT | Vendored unmodified from [Hope2333/opencode-termux](https://github.com/Hope2333/opencode-termux) (native-android branch), Copyright (c) Hope2333 (幽零小喵). |
+| [Bun](https://github.com/oven-sh/bun) | MIT | The official Android AArch64 (Bionic) build from the [Bun releases](https://github.com/oven-sh/bun/releases) (`bun-linux-aarch64-android.zip`), pinned by SHA-256 in `versions.json` and downloaded at build time. |
+| `tools/revive_patch.py` | MIT | Vendored from [Hope2333/opencode-termux](https://github.com/Hope2333/opencode-termux) (native-android branch), Copyright (c) Hope2333 (幽零小喵), with one local fix: the base's non-loaded tail is moved out of the `.bss` range (see the file header). |
 | [ripgrep](https://github.com/BurntSushi/ripgrep) and other Termux packages | various | Installed from Termux repositories and used at build or run time; not redistributed. |
 
 "Claude" and "Anthropic" are trademarks of their owners. This project is not affiliated with or

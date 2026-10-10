@@ -1,8 +1,8 @@
 {
   "base_bun": {
-    "version": "1.4.3-canary.1+5fce36ebb",
-    "url": "https://github.com/wmdhs12138/bun/releases/download/bionic-v1.4.3-canary.1-5fce36ebb/bun-linux-aarch64-android-5fce36ebb6.zip",
-    "archive_sha256": "ff731aeadd66f3d35b6331c08c29685284e9b08f508f5d1d44305290939a8db0",
-    "binary_sha256": "7e8b9686dcb86aea55ba06dd4aa46800189933d3ffe9d22f4209003f82f9ff74"
+    "version": "1.4.3+c6da4a4d3",
+    "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.3/bun-linux-aarch64-android.zip",
+    "archive_sha256": "e8848b6c67769ef1dcf932c1aabafbeaefdea0dd98f715e9455424998242deda",
+    "binary_sha256": "2b5881c336d40ec07543f680a0c41047a113993e6e15ff904255a58597d3f8d2"
   }
 }
