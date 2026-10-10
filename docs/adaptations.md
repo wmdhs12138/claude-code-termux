@@ -36,8 +36,8 @@ Bionic 嫁接产物没有 prelude，普通 CLI 收到 `-G` 就报 `error: unknow
 
 | 模块 | 作用 |
 | --- | --- |
-| `10-android-defaults.js` | 默认 `USE_BUILTIN_RIPGREP=0`（内嵌的 ripgrep 链接 glibc，Grep 工具改用 Termux 的 `rg`）和 `DISABLE_AUTOUPDATER=1`（官方自动更新器会下载 glibc 版本，把这个 ELF 换掉）。 |
-| `20-self-update.js` + `self-update.sh` | 在 Claude 的 CLI 看到参数之前拦截 `claude update` / `upgrade`，执行 `self-update.sh`，见下文。 |
+| `10-android-defaults.js` | 默认 `USE_BUILTIN_RIPGREP=0`（内嵌的 ripgrep 链接 glibc，Grep 工具改用 Termux 的 `rg`）和 `DISABLE_AUTOUPDATER=1`（官方自动更新器会下载 glibc 版本，把这个 ELF 换掉；它在 TUI 里挂载时和之后每 30 分钟检查一次，这个开关连同它的检查和提示一起关掉）。 |
+| `20-self-update.js` + `self-update.sh` | 在 Claude 的 CLI 看到参数之前拦截 `claude update` / `upgrade`，执行 `self-update.sh`；其他交互式启动打印更新提示。见下文。 |
 | `30-peer-credentials.js` | 提供 `Bun.ant.getPeerPid(fd)` / `getPeerUid(fd)`：首次调用时用 `bun:ffi` 打开 Bionic 的 `libc.so`，以 `getsockopt(SO_PEERCRED)` 读取对端的 `struct ucred`。 |
 | `40-cell-segmenter.js` | 纯 JS 实现的 `Bun.ant.CellSegmenter`。 |
 
@@ -68,6 +68,22 @@ Updated Claude Code 2.1.295 → 2.1.296 in 1 min 12 s
 `CLAUDE_CODE_TERMUX_PROGRESS_FD=3`；`scripts/download.sh` 把进度条画在这个 fd 上，`build.sh` 在开始构建时往上面
 写一行状态。进度条会按终端宽度缩短或截断标签，保证不折行（折行之后 `\r` 无法原地重绘）。失败时更新器给出
 原因、日志的最后 8 行和日志路径。
+
+### 启动时的更新提示
+
+官方更新器关掉之后，Claude 自己的检查和提示也没了，所以 `20-self-update.js` 在不是 `update` 的启动里补一个只提示、
+不安装的版本：
+
+- 只在 stdout 和 stderr 都是终端、没有 `-p`/`--print`、`--version`、`--help` 时生效；`CLAUDE_CODE_TERMUX_UPDATE_NOTICE=0`、
+  `DISABLE_UPDATES` 或 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 关闭。
+- 结果缓存在 `~/.cache/claude-code-termux/update-notice`：第一行是检查时这个二进制的大小和修改时间，第二行是
+  `claude update --check` 的输出。第一行和当前二进制对得上、第二行以 `Update available:` 开头，就在启动前把它打印到 stderr。
+- 缓存超过 20 小时，或者二进制已经被换掉（第一行对不上，例如刚运行过 `claude update`），就派生一个脱离会话的
+  `self-update.sh` 检查进程写新的缓存，结果在下次启动时显示，启动本身不等网络。`update-notice.checking` 防止几个
+  会话同时检查。
+- 检查和 `claude update --check` 是同一段代码：只用 Release 页面的跳转和附件（不占 GitHub API 配额），按二进制哈希判断。
+
+Claude 的全屏界面用备用屏幕，启动前打印的这一行会被盖住，退出后回到主屏幕时可见；用经典渲染器时一直在界面上方。
 
 ### 跨会话消息为什么需要 peer 凭据
 

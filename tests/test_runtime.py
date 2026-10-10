@@ -1,12 +1,15 @@
 """runtime/: the JavaScript and shell embedded into the entry module."""
 import hashlib
 import json
+import math
 import os
+import pty
 from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 from common import ROOT, BUILD, RUNTIME, SELF_UPDATE, ASSEMBLE_RUNTIME, INSTALL
@@ -424,6 +427,114 @@ echo "build: OK claude=1.2.4 -> $PWD/dist/claude"
         self.assertNotIn(names[1], remaining)
         self.assertNotIn(names[2], remaining)
         self.assertIn("Bun cache cleanup: 1 retained, 2 removed", proc.stdout)
+
+
+def find_bun():
+    """A Bionic Bun: one on PATH, this checkout's build cache, or `claude update`'s."""
+    cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    candidates = [shutil.which("bun"), *sorted(ROOT.glob("work/bun-bases/bun-*/bun")),
+                  *sorted(cache.glob("claude-code-termux/self-update/bun-bases/bun-*/bun"))]
+    return next((str(c) for c in candidates if c and os.access(c, os.X_OK)), None)
+
+
+@unittest.skipUnless(find_bun(), "needs a Bun runtime")
+class UpdateNoticeTests(unittest.TestCase):
+    """The startup update notice in 20-self-update.js, run in Bun on a pty.
+
+    process.execPath is Bun itself, so Bun plays the installed claude: the
+    background check runs `bun --version` (1.4.3) and hashes the Bun binary.
+    """
+
+    BUN = find_bun()
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.script = assemble_runtime(self.tmp)
+        self.cache = self.tmp / "cache" / "claude-code-termux" / "update-notice"
+        stat = os.stat(self.BUN)
+        # JavaScript's Math.round of mtimeMs.
+        self.identity = f"{stat.st_size}:{math.floor(stat.st_mtime_ns / 1e6 + 0.5)}"
+        self.env = dict(os.environ, XDG_CACHE_HOME=str(self.tmp / "cache"))
+        self.env.pop("CLAUDE_CODE_TERMUX_UPDATE_NOTICE", None)
+
+    def fake_release(self, tag, version, same_build):
+        sha = hashlib.sha256(Path(self.BUN).read_bytes()).hexdigest() if same_build else "d" * 64
+        (self.tmp / "gh").mkdir(exist_ok=True)
+        self.env = SelfUpdateTests.fake_github(self, self.tmp / "gh", tag,
+                                               SelfUpdateTests.manifest(version, sha)) | {
+            "XDG_CACHE_HOME": str(self.tmp / "cache")}
+
+    def write_cache(self, line, identity=None):
+        self.cache.parent.mkdir(parents=True, exist_ok=True)
+        self.cache.write_text(f"{identity or self.identity}\n{line}\n")
+
+    def start(self, *args, tty=True, **env):
+        """Start the runtime like `claude [args]`; what it printed."""
+        cmd = [self.BUN, str(self.script), *args]
+        full_env = dict(self.env, **env)
+        if not tty:
+            proc = subprocess.run(cmd, env=full_env, text=True, capture_output=True, timeout=60)
+            return proc.stdout + proc.stderr
+        master, slave = pty.openpty()
+        proc = subprocess.Popen(cmd, env=full_env, stdin=subprocess.DEVNULL,
+                                stdout=slave, stderr=slave)
+        os.close(slave)
+        out = b""
+        while True:
+            try:
+                chunk = os.read(master, 4096)
+            except OSError:
+                break
+            if not chunk:
+                break
+            out += chunk
+        proc.wait(timeout=60)
+        os.close(master)
+        return out.decode()
+
+    def wait_for_check(self):
+        """The detached check: done once its marker is gone."""
+        marker = self.cache.with_name("update-notice.checking")
+        deadline = time.monotonic() + 60
+        while marker.exists() and time.monotonic() < deadline:
+            time.sleep(0.2)
+        self.assertFalse(marker.exists(), "the background check did not finish")
+
+    def test_a_cached_update_is_shown_on_an_interactive_start(self):
+        self.write_cache("Update available: v1.2.3-r1 is a different build of Claude Code 1.2.3")
+        out = self.start()
+        self.assertIn("Update available: v1.2.3-r1 is a different build", out)
+        self.assertFalse(self.cache.with_name("update-notice.checking").exists(),
+                         "a fresh result must not start another check")
+
+    def test_scripts_and_opt_outs_get_nothing(self):
+        self.write_cache("Update available: Claude Code 1.2.3 → 1.2.4 (v1.2.4)", identity="0:0")
+        self.assertEqual(self.start(tty=False), "")
+        for args, env in ((("-p", "hi"), {}), (("--version",), {}),
+                          ((), {"CLAUDE_CODE_TERMUX_UPDATE_NOTICE": "0"}),
+                          ((), {"DISABLE_UPDATES": "1"})):
+            with self.subTest(args=args, env=env):
+                self.assertNotIn("Update available", self.start(*args, **env))
+        self.assertFalse(self.cache.with_name("update-notice.checking").exists(),
+                         "no check may start for scripts or with the notice turned off")
+
+    def test_a_replaced_binary_is_checked_again_before_anything_is_shown(self):
+        self.fake_release("v1.4.4", "1.4.4", same_build=False)
+        self.write_cache("Update available: an old result", identity="0:0")
+        self.assertNotIn("an old result", self.start())
+        self.wait_for_check()
+        self.assertEqual(self.cache.read_text().splitlines(), [
+            self.identity, "Update available: Claude Code 1.4.3 → 1.4.4 (v1.4.4); run: claude update"])
+        self.assertIn("Update available: Claude Code 1.4.3 → 1.4.4 (v1.4.4)", self.start())
+
+    def test_first_start_checks_and_stays_quiet_when_up_to_date(self):
+        self.fake_release("v1.4.3", "1.4.3", same_build=True)
+        self.assertEqual(self.start(), "")
+        self.wait_for_check()
+        self.assertEqual(self.cache.read_text().splitlines(),
+                         [self.identity, "Claude Code 1.4.3 is up to date (v1.4.3)"])
+        self.assertEqual(self.start(), "")
 
 
 if __name__ == "__main__":

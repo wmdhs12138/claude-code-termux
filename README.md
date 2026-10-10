@@ -48,6 +48,11 @@ CI 验收过的 Release：在临时目录用该 Release 对应的源码构建，
 所以同一 Claude 版本因工具链更新重新发布的 `vX.Y.Z-rN` 也能识别。上游刚发布、还没通过 CI 的版本不会出现，
 CI 每天检查一次。
 
+交互式启动时，如果后台检查发现了新的已验收构建（新版本或 `-rN`），会在界面之前打印一行
+`Update available: …; run: claude update`；全屏界面会盖住它，退出后可见。检查最多每 20 小时一次，`claude update`
+换掉二进制后会立刻重新检查，只提示、从不安装。`-p`、管道和 `--version` 既不提示也不检查；
+设置 `CLAUDE_CODE_TERMUX_UPDATE_NOTICE=0`（或官方的 `DISABLE_UPDATES`、`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`）关闭。
+
 终端上只显示进度，构建细节写在 `~/.cache/claude-code-termux/self-update/update.log`；失败时会显示原因和
 日志的最后几行。
 
