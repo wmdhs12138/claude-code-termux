@@ -66,7 +66,7 @@ PT_LOAD = 1
 PT_DYNAMIC = 2
 SHT_NOBITS = 8
 SHF_ALLOC = 0x2
-PF_W = 0x2                  # program header flag: writable (SHF_WRITE==0x1 is a SECTION flag!)
+PF_W = 0x2                   # program header flag: writable (SHF_WRITE==0x1 is a SECTION flag!)
 R_AARCH64_RELATIVE = 1027    # 0x403
 DT_NULL = 0
 DT_RELA = 7                  # address of rela table (vaddr)
