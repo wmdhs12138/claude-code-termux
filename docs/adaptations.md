@@ -24,6 +24,19 @@ Bionic 嫁接产物没有 prelude，普通 CLI 收到 `-G` 就报 `error: unknow
 `return!0`，不移动任何偏移；再把所在模块的 bytecode 和 module_info 指针清零，强制它从源码编译，补丁才会
 生效（其余模块仍走字节码）。效果：`grep`、`find` 不再被遮蔽，Bash 里用的是 Termux 自带的命令。
 
+## 图内补丁：`native_updater`（`tools/adapt_graph.py`）
+
+Claude 的自动更新组件在 TUI 挂载时和之后每 30 分钟调用一次 `installLatest(channel, force, storage)`，`claude update`
+和 `claude install` 也走它；官方实现会把 glibc 版本下载到 `~/.local/share/claude/versions` 再切换符号链接。
+处理：按函数体里那句 `"installLatest: joining in-flight call"` 日志找到唯一的 `installLatest()`（向前找最近的
+`function 名字(参数){`，扫描配对的右括号，跳过字符串和模板字面量），把整个函数体等长替换成
+`return globalThis.__claudeTermuxInstallLatest(...arguments)` 加空格，同样清零所在模块的字节码。钩子由
+`20-self-update.js` 提供，见下文；找不到这句日志、找到不止一处，或函数比替换内容还短，构建都会失败。
+
+于是自动更新保留了官方的节奏和界面（`Checking for updates`、`✓ Update installed · Restart to update`、失败时
+`Auto-update failed`），装的是本项目 CI 验收过、在手机上构建的版本。界面是否显示成功由组件按
+`主.次.修订` 比较版本决定，所以同一版本的 `-rN` 会在后台装好但不提示。
+
 ## 嵌入的运行时（`runtime/`）
 
 `runtime/` 里每个 `NN-名字.js` 都是一个自包含的 IIFE。`tools/assemble_runtime.py` 按文件名顺序拼接，并把
@@ -36,8 +49,8 @@ Bionic 嫁接产物没有 prelude，普通 CLI 收到 `-G` 就报 `error: unknow
 
 | 模块 | 作用 |
 | --- | --- |
-| `10-android-defaults.js` | 默认 `USE_BUILTIN_RIPGREP=0`（内嵌的 ripgrep 链接 glibc，Grep 工具改用 Termux 的 `rg`）和 `DISABLE_AUTOUPDATER=1`（官方自动更新器会下载 glibc 版本，把这个 ELF 换掉；它在 TUI 里挂载时和之后每 30 分钟检查一次，这个开关连同它的检查和提示一起关掉）。 |
-| `20-self-update.js` + `self-update.sh` | 在 Claude 的 CLI 看到参数之前拦截 `claude update` / `upgrade`，执行 `self-update.sh`；其他交互式启动打印更新提示。见下文。 |
+| `10-android-defaults.js` | 默认 `USE_BUILTIN_RIPGREP=0`（内嵌的 ripgrep 链接 glibc，Grep 工具改用 Termux 的 `rg`）。自动更新不再默认关闭：`native_updater` 已经把它的安装改到本地构建。 |
+| `20-self-update.js` + `self-update.sh` | 在 Claude 的 CLI 看到参数之前拦截 `claude update` / `upgrade`，执行 `self-update.sh`；提供自动更新用的 `__claudeTermuxInstallLatest`；关掉自动更新时在交互式启动里打印更新提示。见下文。 |
 | `30-peer-credentials.js` | 提供 `Bun.ant.getPeerPid(fd)` / `getPeerUid(fd)`：首次调用时用 `bun:ffi` 打开 Bionic 的 `libc.so`，以 `getsockopt(SO_PEERCRED)` 读取对端的 `struct ucred`。 |
 | `40-cell-segmenter.js` | 纯 JS 实现的 `Bun.ant.CellSegmenter`。 |
 
@@ -69,10 +82,23 @@ Updated Claude Code 2.1.295 → 2.1.296 in 1 min 12 s
 写一行状态。进度条会按终端宽度缩短或截断标签，保证不折行（折行之后 `\r` 无法原地重绘）。失败时更新器给出
 原因、日志的最后 8 行和日志路径。
 
-### 启动时的更新提示
+### 自动更新：`__claudeTermuxInstallLatest`
 
-官方更新器关掉之后，Claude 自己的检查和提示也没了，所以 `20-self-update.js` 在不是 `update` 的启动里补一个只提示、
-不安装的版本：
+`native_updater` 把 `installLatest()` 接到这里。每次调用：
+
+1. 用 `auto-update.lock`（`~/.cache/claude-code-termux/self-update/` 下的目录锁，一小时后视为失效）保证多个会话
+   同时只有一个在更新；拿不到锁就返回 `lockFailed`，组件会安静地跳过这一轮。
+2. 以 `--check` 模式运行 `self-update.sh`。检查失败（多半是离线）当作没有更新，不在界面上报错。
+3. 需要更新时运行完整的 `self-update.sh`，和 `claude update` 一样构建并原子替换；成功返回 `wasUpdated`，失败抛错，
+   组件显示 `Auto-update failed`。stdout、stderr 都追加到 `auto-update.log`，从不写终端，也不设置进度 fd。
+
+运行中的进程继续用旧的 inode，替换后下次启动才是新版本，所以组件提示 `Restart to update`。`build.sh` 的 TUI
+冒烟设置 `DISABLE_AUTOUPDATER=1`，候选二进制不会在冒烟时被自动更新换掉。
+
+### 关掉自动更新时的启动提示
+
+用户自己设置 `DISABLE_AUTOUPDATER`（按 Claude 的规则解析，`0`/`false` 不算）之后，Claude 的检查和提示也一起没了，
+所以 `20-self-update.js` 在不是 `update` 的启动里补一个只提示、不安装的版本：
 
 - 只在 stdout 和 stderr 都是终端、没有 `-p`/`--print`、`--version`、`--help` 时生效；`CLAUDE_CODE_TERMUX_UPDATE_NOTICE=0`、
   `DISABLE_UPDATES` 或 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 关闭。

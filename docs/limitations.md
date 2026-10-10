@@ -25,7 +25,7 @@
 | 字节码 | 官方模块图里的字节码不被采用，所有模块都从内嵌源码解析。官方运行时基于 WebKit `35e8970`，这里的 Bun 底座是 `0c06faa`，JavaScriptCore 版本不同；去掉全部字节码前后，首帧都是约 1.3 s，`--help` 约 0.85 s。 |
 | 搜索 | Bash 里的 `grep`、`find` 是 Termux 的 GNU 版本，不是内嵌的 ugrep、bfs，选项和输出格式可能略有不同；Grep / Glob 工具用 Termux 的 `ripgrep`。 |
 | 低内存判断 | 走 Linux 分支的 `os.freemem()`，Bun 取的是 `MemAvailable`，结果准确。`/proc/pressure/memory` 对应用不可读。 |
-| 更新 | 只跟随本项目 CI 验收过的 Release，最多晚一天，并且每次在手机上本地构建。 |
+| 更新 | 和桌面版一样在 TUI 后台自动更新，但只跟随本项目 CI 验收过的 Release（最多晚一天），每次在手机上本地构建（下载约 250 MB，构建约一分钟）。同一版本的 `-rN` 会装好但状态栏不提示。 |
 
 ## 可能的补法（未实现）
 

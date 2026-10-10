@@ -42,16 +42,21 @@ claude update           # 有已验收的新版时构建并替换
 claude update --force   # 重新构建已验收的最新 Release
 ```
 
-不会调用官方更新器，因为它下载的是不能在 Termux 运行的 glibc 版本。`claude update` 只采用本项目
+和桌面版一样，TUI 会在后台自动更新：启动时和之后每 30 分钟检查一次，有新的已验收版本就在后台构建并替换，
+状态栏显示 `✓ Update installed · Restart to update`，重启后生效。构建过程写进
+`~/.cache/claude-code-termux/self-update/auto-update.log`，不打扰界面；同一版本的 `-rN` 也会在后台装好，
+只是版本号没变，状态栏不提示。用官方的 `DISABLE_AUTOUPDATER=1` 关闭自动更新。
+
+不会调用官方的安装流程，因为它下载的是不能在 Termux 运行的 glibc 版本。`claude update` 和自动更新只采用本项目
 CI 验收过的 Release：在临时目录用该 Release 对应的源码构建，构建是可复现的，得到的二进制必须和 CI
 验收的那个哈希一致才原子替换；任何一步失败，原有的 `claude` 都保持不变。是否最新按二进制哈希判断，
 所以同一 Claude 版本因工具链更新重新发布的 `vX.Y.Z-rN` 也能识别。上游刚发布、还没通过 CI 的版本不会出现，
 CI 每天检查一次。
 
-交互式启动时，如果后台检查发现了新的已验收构建（新版本或 `-rN`），会在界面之前打印一行
-`Update available: …; run: claude update`；全屏界面会盖住它，退出后可见。检查最多每 20 小时一次，`claude update`
-换掉二进制后会立刻重新检查，只提示、从不安装。`-p`、管道和 `--version` 既不提示也不检查；
-设置 `CLAUDE_CODE_TERMUX_UPDATE_NOTICE=0`（或官方的 `DISABLE_UPDATES`、`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`）关闭。
+关掉自动更新后，交互式启动时如果后台检查发现了新的已验收构建（新版本或 `-rN`），会在界面之前打印一行
+`Update available: …; run: claude update`；全屏界面会盖住它，退出后可见。检查最多每 20 小时一次，只提示、从不安装。
+`-p`、管道和 `--version` 既不提示也不检查；`CLAUDE_CODE_TERMUX_UPDATE_NOTICE=0`（或官方的 `DISABLE_UPDATES`、
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`）连提示也关掉。
 
 终端上只显示进度，构建细节写在 `~/.cache/claude-code-termux/self-update/update.log`；失败时会显示原因和
 日志的最后几行。

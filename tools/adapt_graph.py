@@ -13,6 +13,16 @@ Adaptation: search_shadow
   module to compile from source (zero its bytecode pointer) so the patch takes
   effect.
 
+Adaptation: native_updater
+  installLatest() is how Claude's own auto-updater (TUI mount and every 30
+  minutes), `claude update` and `claude install` install a release: it
+  downloads the official glibc build into ~/.local/share/claude/versions.
+  Fix: replace its body with a call to globalThis.__claudeTermuxInstallLatest,
+  which runtime/20-self-update.js provides (the CI-approved release, built
+  here). The auto-updater keeps its schedule and status line, so updates run
+  in the background as on the desktop. The function is found by its
+  "installLatest: joining in-flight call" log line.
+
 Usage: adapt_graph.py <graph.bin> <out.bin> [--report report.json]
 
 --report writes a machine-readable record of what was actually applied, so the
@@ -29,9 +39,61 @@ SEARCH_OPT_IN_GETTER = re.compile(
     rb'searchToolsOptIn\(\)\}'
 )
 
+INSTALL_LATEST_ANCHOR = b'"installLatest: joining in-flight call"'
+FUNCTION_HEAD = re.compile(rb'function (?P<fn>[A-Za-z_$][A-Za-z0-9_$]*)\((?P<params>[^()]*)\)\{')
+INSTALL_LATEST_HOOK = b'return globalThis.__claudeTermuxInstallLatest(...arguments)'
+MAX_FUNCTION_BYTES = 4096
+
 def make_replacement(old: bytes, new_body: bytes) -> bytes:
     pad = len(old) - len(new_body) - 1
     return new_body + b' ' * pad + b'}'
+
+def closing_brace(data, open_at: int):
+    """Index of the `}` closing the `{` at open_at, skipping string and template
+    literals (with ${...} nesting); None if not found within MAX_FUNCTION_BYTES."""
+    stack = ['{']   # '{' code block, '`' template, '${' template expression
+    i = open_at + 1
+    end = min(len(data), open_at + MAX_FUNCTION_BYTES)
+    while i < end:
+        c = data[i:i + 1]
+        if stack[-1] == '`':
+            if c == b'\\':
+                i += 2
+                continue
+            if c == b'`':
+                stack.pop()
+            elif data[i:i + 2] == b'${':
+                stack.append('${')
+                i += 1
+        elif c in (b'"', b"'"):
+            i += 1
+            while i < end and data[i:i + 1] != c:
+                i += 2 if data[i:i + 1] == b'\\' else 1
+        elif c == b'`':
+            stack.append('`')
+        elif c == b'{':
+            stack.append('{')
+        elif c == b'}':
+            stack.pop()
+            if not stack:
+                return i
+        i += 1
+    return None
+
+def install_latest_function(data):
+    """(start, end) of the installLatest() function: the closest function
+    around the anchor whose braces enclose it."""
+    sites = [m.start() for m in re.finditer(re.escape(INSTALL_LATEST_ANCHOR), data)]
+    if len(sites) != 1:
+        raise SystemExit(f'installLatest() log line found {len(sites)} times, expected 1; '
+                         'graph layout changed?')
+    anchor = sites[0]
+    heads = list(FUNCTION_HEAD.finditer(data, max(0, anchor - MAX_FUNCTION_BYTES), anchor))
+    for head in reversed(heads):
+        close = closing_brace(data, head.end() - 1)
+        if close is not None and close > anchor:
+            return head, close + 1
+    raise SystemExit('installLatest() not found around its log line; graph layout changed?')
 
 def main():
     argv = sys.argv[1:]
@@ -69,9 +131,21 @@ def main():
         new_fn = make_replacement(old_fn, new_body)
         data[match.start():match.end()] = new_fn
         patches.append((match.start(), new_fn))
+    print(f'patched searchToolsOptIn() getter at {[site for site, _ in patches]}')
+
+    head, end = install_latest_function(data)
+    old_fn = bytes(data[head.start():end])
+    new_body = b'function ' + head.group('fn') + b'(' + head.group('params') + b'){' + INSTALL_LATEST_HOOK
+    if len(new_body) + 1 > len(old_fn):
+        raise SystemExit(f'installLatest() ({len(old_fn)}B) is shorter than its replacement')
+    new_fn = make_replacement(old_fn, new_body)
+    data[head.start():end] = new_fn
+    patches.append((head.start(), new_fn))
+    print(f'patched installLatest() {head.group("fn").decode()} at {head.start()} '
+          f'({len(old_fn)}B -> hook)')
+
     hits = [site for site, _ in patches]
-    adaptations = ['search_shadow']
-    print(f'patched searchToolsOptIn() getter at {hits}')
+    adaptations = ['search_shadow', 'native_updater']
 
     # Force every module whose contents contain a patched site to compile from source.
     forced = set()
@@ -82,15 +156,14 @@ def main():
             if co <= h < co + cl:
                 forced.add(i)
                 break
-    if not forced:
+    if len(forced) < len(adaptations):
         # The bytes above are patched, but if no module record covers them the
         # runtime keeps executing that module's bytecode and never compiles the
         # patched source: the adaptation silently does nothing while the build
         # still reports success.
-        raise SystemExit(f'searchToolsOptIn() getter patched at {hits} but no module '
-                         'record covers those bytes, so nothing would be forced to '
-                         'compile from source and the adaptation would be a silent '
-                         'no-op. Layout changed?')
+        raise SystemExit(f'graph patched at {hits} but no module record covers those '
+                         'bytes, so nothing would be forced to compile from source and '
+                         'the adaptation would be a silent no-op. Layout changed?')
 
     forced_names = []
     for i in sorted(forced):

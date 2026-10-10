@@ -244,8 +244,9 @@ if [ "${SKIP_RUN:-0}" = "1" ]; then
 else
   SMOKE_LOG="$WORK/tui-smoke.log"
   # USE_BUILTIN_RIPGREP matters because the embedded rg is a
-  # linux binary, and DISABLE_AUTOUPDATER keeps a 7-second check from letting
-  # the official self-updater swap the candidate out from under it.
+  # linux binary, and DISABLE_AUTOUPDATER keeps Claude's auto-updater, which
+  # now builds and swaps in the latest release (native_updater), from replacing
+  # the candidate under test.
   if ! USE_BUILTIN_RIPGREP=0 DISABLE_AUTOUPDATER=1 \
        python3 "$ROOT/tools/tui_smoke.py" "$CANDIDATE" "$SMOKE_SECONDS" > "$SMOKE_LOG" 2>&1; then
     die_kept "the staged candidate did not render a TUI: $(tail -1 "$SMOKE_LOG")"

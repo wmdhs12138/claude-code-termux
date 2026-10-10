@@ -32,6 +32,65 @@ class GraphAdaptationTests(unittest.TestCase):
         data = b"searchToolsOptIn(){return this.#C}"
         self.assertEqual(list(self.module.SEARCH_OPT_IN_GETTER.finditer(data)), [])
 
+    # installLatest() as in 2.1.296, plus braces in a string, a template literal
+    # with ${...} and a nested block, which the extent scan must step over.
+    INSTALL_LATEST = (
+        b'function OGe(e,n=!1,r){if(n)return ht(e,n,r);let s=Ln.of(H().host);'
+        b'if(s.inFlight)return t("installLatest: joining in-flight call"),s.inFlight;'
+        b'let q="}{",u=`a${{b:1}.b}}`;if(q){u+="}"}'
+        b'let h=ht(e,n,r);s.begin(h);let w=()=>{s.reset()};return h.then(w,w),h}'
+    )
+
+    def test_finds_install_latest_by_its_log_line(self):
+        data = b"function ht(e){return{a:1}}" + self.INSTALL_LATEST + b"function Mn(){}"
+        head, end = self.module.install_latest_function(data)
+        self.assertEqual(data[head.start():end], self.INSTALL_LATEST)
+        self.assertEqual(head.group("fn"), b"OGe")
+
+    def test_install_latest_must_be_found_exactly_once(self):
+        for data in (b"function OGe(){}", self.INSTALL_LATEST * 2):
+            with self.assertRaises(SystemExit):
+                self.module.install_latest_function(data)
+
+    def test_routes_install_latest_to_the_runtime_hook(self):
+        getter = b"function KKn(){return n().host.launchOptions.searchToolsOptIn()}"
+        modules = [(b"/$bunfs/root/a.js", b"var x=1;" + getter),
+                   (b"/$bunfs/root/b.js", b"function ht(){}" + self.INSTALL_LATEST + b"export{OGe};"),
+                   (b"/$bunfs/root/c.js", b"var unrelated=1;")]
+        payload, records = bytearray(), []
+        for name, src in modules:
+            src_off = len(payload)
+            payload += src
+            name_off = len(payload)
+            payload += name
+            # Nonzero bytecode and module_info, to see which ones are cleared.
+            records.append((name_off, len(name), src_off, len(src), 0, 0, 7, 7, 9, 9, 0, 0, 0))
+        mod_off = len(payload)
+        for rec in records:
+            payload += struct.pack("<13I", *rec)
+        payload += struct.pack("<QIIIIII", len(payload), mod_off, len(records) * 52, 0, 0, 0, 0)
+        payload += b"\n---- Bun! ----\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            src, dst, report = (Path(tmp) / n for n in ("in.bin", "out.bin", "report.json"))
+            src.write_bytes(payload)
+            proc = subprocess.run([sys.executable, str(ROOT / "tools" / "adapt_graph.py"), str(src),
+                                   str(dst), "--report", str(report)], text=True, capture_output=True)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            out = dst.read_bytes()
+            self.assertEqual(json.loads(report.read_text())["adaptations"],
+                             ["search_shadow", "native_updater"])
+        self.assertEqual(len(out), len(payload))
+        at = payload.index(self.INSTALL_LATEST)
+        patched = out[at:at + len(self.INSTALL_LATEST)]
+        self.assertTrue(patched.startswith(
+            b"function OGe(e,n=!1,r){return globalThis.__claudeTermuxInstallLatest(...arguments)"))
+        self.assertTrue(patched.rstrip(b" }").endswith(b"(...arguments)"))
+        self.assertTrue(patched.endswith(b" }"))
+        self.assertIn(b"export{OGe};", out)
+        for i, cleared in enumerate((True, True, False)):
+            bytecode = struct.unpack_from("<4I", out, mod_off + i * 52 + 24)
+            self.assertEqual(bytecode == (0, 0, 0, 0), cleared, modules[i][0])
+
 
 class NativeAbiCheckTests(unittest.TestCase):
     @classmethod

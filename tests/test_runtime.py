@@ -69,7 +69,8 @@ class RuntimeModuleTests(unittest.TestCase):
         source = (RUNTIME / "10-android-defaults.js").read_text()
         self.assertIn('process.platform !== "android"', source)
         self.assertIn('process.env.USE_BUILTIN_RIPGREP === undefined', source)
-        self.assertIn('process.env.DISABLE_AUTOUPDATER === undefined', source)
+        # The auto-updater stays on; native_updater routes its installs here.
+        self.assertNotIn('DISABLE_AUTOUPDATER = "1"', source)
 
     def test_provides_peer_credentials_without_overriding_native(self):
         source = (RUNTIME / "30-peer-credentials.js").read_text()
@@ -438,6 +439,84 @@ def find_bun():
 
 
 @unittest.skipUnless(find_bun(), "needs a Bun runtime")
+class InstallLatestTests(unittest.TestCase):
+    """__claudeTermuxInstallLatest, which Claude's auto-updater calls through
+    the native_updater adaptation, against a fake GitHub.
+
+    A copy of Bun plays the running claude (process.execPath), so an update
+    really replaces it.
+    """
+
+    BUN = find_bun()
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.claude = self.tmp / "claude"
+        shutil.copy(self.BUN, self.claude)
+        self.script = self.tmp / "hook.mjs"
+        self.script.write_text(assemble_runtime(self.tmp).read_text() + """
+const result = await globalThis.__claudeTermuxInstallLatest("latest", false, undefined);
+console.log(JSON.stringify(result));
+""")
+        self.cache = self.tmp / "cache"
+        self.env = dict(os.environ)
+
+    def release(self, tag, version, same_build=False, build_script=None):
+        sha = (hashlib.sha256(self.claude.read_bytes()).hexdigest() if same_build
+               else SelfUpdateTests.fake_claude(self.tmp / "expected", version))
+        (self.tmp / "gh").mkdir()
+        self.env = SelfUpdateTests.fake_github(self, self.tmp / "gh", tag,
+                                               SelfUpdateTests.manifest(version, sha), build_script)
+
+    def install_latest(self):
+        proc = subprocess.run([str(self.claude), str(self.script)], text=True, capture_output=True,
+                              timeout=300, env=dict(self.env, XDG_CACHE_HOME=str(self.cache),
+                                                    TMPDIR=str(self.tmp)))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(proc.stderr, "", "nothing may reach the terminal")
+        return json.loads(proc.stdout.strip().splitlines()[-1])
+
+    def log(self):
+        return (self.cache / "claude-code-termux" / "self-update" / "auto-update.log").read_text()
+
+    def test_up_to_date_installs_nothing(self):
+        self.release("v1.4.3-r1", "1.4.3", same_build=True)
+        before = self.claude.read_bytes()
+        self.assertEqual(self.install_latest(),
+                         {"latestVersion": "1.4.3", "wasUpdated": False, "lockFailed": False})
+        self.assertEqual(self.claude.read_bytes(), before)
+        self.assertIn("is up to date (v1.4.3-r1)", self.log())
+
+    def test_a_newer_approved_release_is_built_and_swapped_in(self):
+        self.release("v1.4.4", "1.4.4",
+                     build_script=SelfUpdateTests.NOISY_BUILD.replace("1.2.4", "1.4.4"))
+        self.assertEqual(self.install_latest(),
+                         {"latestVersion": "1.4.4", "wasUpdated": True, "lockFailed": False})
+        self.assertEqual(subprocess.run([str(self.claude), "--version"], text=True,
+                                        capture_output=True).stdout, "1.4.4 (Claude Code)\n")
+        self.assertIn("Updated Claude Code 1.4.3 → 1.4.4", self.log())
+        self.assertFalse((self.cache / "claude-code-termux" / "self-update" / "auto-update.lock").exists())
+
+    def test_another_session_building_holds_the_lock(self):
+        self.release("v1.4.4", "1.4.4")
+        (self.cache / "claude-code-termux" / "self-update" / "auto-update.lock").mkdir(parents=True)
+        self.assertEqual(self.install_latest(),
+                         {"latestVersion": None, "wasUpdated": False, "lockFailed": True})
+
+    def test_offline_is_nothing_to_do(self):
+        fake = self.tmp / "offline"
+        fake.mkdir()
+        (fake / "curl").write_text("#!/bin/sh\necho 'curl: (6) Could not resolve host' >&2\nexit 6\n")
+        (fake / "curl").chmod(0o755)
+        self.env = dict(os.environ, PATH=f"{fake}:{os.environ['PATH']}")
+        before = self.claude.read_bytes()
+        self.assertEqual(self.install_latest(),
+                         {"latestVersion": None, "wasUpdated": False, "lockFailed": False})
+        self.assertEqual(self.claude.read_bytes(), before)
+
+
+@unittest.skipUnless(find_bun(), "needs a Bun runtime")
 class UpdateNoticeTests(unittest.TestCase):
     """The startup update notice in 20-self-update.js, run in Bun on a pty.
 
@@ -455,7 +534,8 @@ class UpdateNoticeTests(unittest.TestCase):
         stat = os.stat(self.BUN)
         # JavaScript's Math.round of mtimeMs.
         self.identity = f"{stat.st_size}:{math.floor(stat.st_mtime_ns / 1e6 + 0.5)}"
-        self.env = dict(os.environ, XDG_CACHE_HOME=str(self.tmp / "cache"))
+        # The notice is for users who turned Claude's auto-updater off.
+        self.env = dict(os.environ, XDG_CACHE_HOME=str(self.tmp / "cache"), DISABLE_AUTOUPDATER="1")
         self.env.pop("CLAUDE_CODE_TERMUX_UPDATE_NOTICE", None)
 
     def fake_release(self, tag, version, same_build):
@@ -463,7 +543,7 @@ class UpdateNoticeTests(unittest.TestCase):
         (self.tmp / "gh").mkdir(exist_ok=True)
         self.env = SelfUpdateTests.fake_github(self, self.tmp / "gh", tag,
                                                SelfUpdateTests.manifest(version, sha)) | {
-            "XDG_CACHE_HOME": str(self.tmp / "cache")}
+            "XDG_CACHE_HOME": str(self.tmp / "cache"), "DISABLE_AUTOUPDATER": "1"}
 
     def write_cache(self, line, identity=None):
         self.cache.parent.mkdir(parents=True, exist_ok=True)
@@ -507,6 +587,20 @@ class UpdateNoticeTests(unittest.TestCase):
         self.assertIn("Update available: v1.2.3-r1 is a different build", out)
         self.assertFalse(self.cache.with_name("update-notice.checking").exists(),
                          "a fresh result must not start another check")
+
+    def test_nothing_while_the_auto_updater_is_on(self):
+        self.write_cache("Update available: Claude Code 1.2.3 → 1.2.4 (v1.2.4)")
+        for value in (None, "0", "false"):
+            with self.subTest(DISABLE_AUTOUPDATER=value):
+                env = dict(self.env)
+                env.pop("DISABLE_AUTOUPDATER")
+                if value is not None:
+                    env["DISABLE_AUTOUPDATER"] = value
+                self.env, saved = env, self.env
+                try:
+                    self.assertEqual(self.start(), "")
+                finally:
+                    self.env = saved
 
     def test_scripts_and_opt_outs_get_nothing(self):
         self.write_cache("Update available: Claude Code 1.2.3 → 1.2.4 (v1.2.4)", identity="0:0")

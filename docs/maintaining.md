@@ -16,6 +16,7 @@ scripts/build.sh 2.1.295                 # 官方二进制和 Bun 底座都缓�
 | --- | --- | --- |
 | `native-abi: DRIFT` | Claude 对 `Bun.ant` 的用法变了：新成员、CellSegmenter 调用面变化，或换了写法导致看不见调用点 | 在模块图里找到新的调用点（`tools/extract_graph.py` 提取后搜索），扩展 `runtime/` 里对应的模块，再更新 `tools/check_native_abi.py` 的已知集合；`tests/test_graph.py` 里有每种情况的最小样例 |
 | `searchToolsOptIn() getter not found` | 这个 getter 的写法变了 | 在模块图里找到新的写法，更新 `tools/adapt_graph.py` 的正则，加测试样例 |
+| `installLatest() log line found N times` / `not found around its log line` | 官方的安装函数改了日志或结构 | 在模块图里搜 `installLatest` 和自动更新组件（`tengu_native_auto_updater_start`）找到新的安装入口，更新 `tools/adapt_graph.py` 的锚点；`tests/test_graph.py` 有样例。绝不能跳过这个补丁：没有它，自动更新会下载 glibc 版本 |
 | 嫁接或版本探针（段错误） | 模块图格式随 Bun 版本变了（例如 1.4.3 新增的 flag bit 11/12） | 需要更新的 Bun 底座，见下文；格式细节见 [format.md](format.md) |
 | TUI 冒烟 | 能启动但画不出界面，几乎总是渲染层的私有接口 | 在手机上直接运行 `dist/.claude.new` 看报错 |
 
