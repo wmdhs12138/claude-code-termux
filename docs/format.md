@@ -98,7 +98,8 @@ Claude 2.1.270：`flags = 0x1fff`（bit 0–12 全开），1864 个模块，`ent
 
 1. 定位 `.bun` 节（要求 `addr == offset`，identity mapping）；
 2. 找到覆盖它的可写 PT_LOAD；新数据放到 `max(file_end, bss_end)` 之后并按 16 KiB 对齐
-   （避免覆盖 `.bss` 的零初始化区）；
+   （避免覆盖 `.bss` 的零初始化区）。底座在段尾之后的非加载内容（`.symtab`、节头表等）会随
+   `p_filesz` 扩展被映射进 `.bss`，所以先把它搬到文件末尾、修正 `e_shoff`/`sh_offset`，原位置清零；
 3. 追加 `[u64 payload_len][payload]`；
 4. 把 payload vaddr 写进 `.bun[0]`（`BUN_COMPILED.size`）；
 5. 扩展该 PT_LOAD 的 `p_filesz`/`p_memsz` 覆盖新数据。

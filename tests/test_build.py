@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -298,6 +299,80 @@ class BuildSmokeWiringTests(unittest.TestCase):
 
     def test_manifest_records_whether_the_render_check_ran(self):
         self.assertIn('"tui_smoke": load(smoke_path)', self.script)
+
+
+class GraftTests(unittest.TestCase):
+    """tools/revive_patch.py on a minimal ELF shaped like a Bionic Bun base."""
+
+    BUN_SLOT = 0x100
+    SEG_END = 0x200     # file end of the writable PT_LOAD
+    BSS_END = 0x8000
+    SYMTAB = b"\xaa" * 64
+
+    def base_elf(self):
+        # One RW PT_LOAD [0, SEG_END) with .bss up to BSS_END. The base keeps
+        # non-loaded data (.shstrtab, .symtab, section headers) right after
+        # SEG_END, inside the .bss range, as the official Bun 1.4.3 does.
+        names = b"\0.bun\0.shstrtab\0.symtab\0"
+        shstrtab_off = self.SEG_END
+        symtab_off = shstrtab_off + len(names)
+        shoff = (symtab_off + len(self.SYMTAB) + 7) & ~7
+        out = bytearray(shoff + 4 * 64)
+        out[:16] = b"\x7fELF\x02\x01\x01" + b"\0" * 9
+        struct.pack_into("<HHIQQQIHHHHHH", out, 16, 3, 183, 1, 0, 64, shoff,
+                         0, 64, 56, 1, 64, 4, 2)
+        struct.pack_into("<IIQQQQQQ", out, 64, 1, 6, 0, 0, 0,
+                         self.SEG_END, self.BSS_END, 0x10000)
+        out[0x110:0x11a] = b"Bun v1.4.3"
+        out[shstrtab_off:shstrtab_off + len(names)] = names
+        out[symtab_off:symtab_off + len(self.SYMTAB)] = self.SYMTAB
+        for i, (name, kind, flags, addr, off, size) in enumerate([
+            (0, 0, 0, 0, 0, 0),
+            (1, 1, 3, self.BUN_SLOT, self.BUN_SLOT, 8),
+            (6, 3, 0, 0, shstrtab_off, len(names)),
+            (16, 2, 0, 0, symtab_off, len(self.SYMTAB)),
+        ]):
+            struct.pack_into("<IIQQQQIIQQ", out, shoff + i * 64,
+                             name, kind, flags, addr, off, size, 0, 0, 8, 0)
+        return bytes(out)
+
+    def graft(self, base):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "bun").write_bytes(base)
+            (root / "graph.bin").write_bytes(
+                b"/$bunfs/root/x.js" + b"\0" * 32 + b"\n---- Bun! ----\n")
+            proc = subprocess.run(
+                [sys.executable, str(ROOT / "tools" / "revive_patch.py"),
+                 "--bun", str(root / "bun"), "--graph", str(root / "graph.bin"),
+                 "--out", str(root / "out")],
+                text=True, capture_output=True,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            return (root / "out").read_bytes()
+
+    def test_old_bss_extent_maps_as_zeros(self):
+        out = self.graft(self.base_elf())
+        payload = struct.unpack_from("<Q", out, self.BUN_SLOT)[0]
+        self.assertGreaterEqual(payload, self.BSS_END)
+        self.assertEqual(out[self.SEG_END:payload], bytes(payload - self.SEG_END))
+
+    def test_section_headers_survive_outside_the_mapped_range(self):
+        out = self.graft(self.base_elf())
+        filesz = struct.unpack_from("<Q", out, 64 + 32)[0]
+        shoff, = struct.unpack_from("<Q", out, 0x28)
+        self.assertGreaterEqual(shoff, filesz)
+        sections = {}
+        for i in range(4):
+            name, _, _, addr, off, size = struct.unpack_from(
+                "<IIQQQQ", out, shoff + i * 64)
+            sections[name] = (addr, off, size)
+        names_off = sections[6][1]
+        self.assertEqual(out[names_off:names_off + 5], b"\0.bun")
+        self.assertEqual(sections[1][:2], (self.BUN_SLOT, self.BUN_SLOT))
+        _, symtab_off, size = sections[16]
+        self.assertGreaterEqual(symtab_off, filesz)
+        self.assertEqual(out[symtab_off:symtab_off + size], self.SYMTAB)
 
 
 class TuiSmokeTests(unittest.TestCase):
