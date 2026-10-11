@@ -2,9 +2,17 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-VERSION="${CLAUDE_VERSION_INPUT:-latest}"
+# bionic-build.sh VERSION IMAGE. Arguments, not `docker run -e`: the image's
+# entrypoint does not pass those variables to the command.
+VERSION="${1:-latest}"
+IMAGE="${2:-unknown}"
 
 echo "::group::Install Termux build dependencies"
+# The image has no chosen mirror, so every `pkg` call picks a random one and
+# rewrites sources.list; one answering 429 failed an opencode-termux release
+# build. Use the official repository, as codex-termux does.
+echo 'deb https://packages.termux.dev/apt/termux-main stable main' > "$PREFIX/etc/apt/sources.list"
+export TERMUX_PKG_NO_MIRROR_SELECT=1
 pkg update -y
 apt_options=(-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
 pkg upgrade -y "${apt_options[@]}"
@@ -24,10 +32,10 @@ ACTUAL_VERSION="$(python3 -c 'import json; print(json.load(open("dist/build-mani
 test "$ACTUAL_VERSION" = "$(tr -d '[:space:]' < work/.claude-version)"
 ./dist/claude --version | grep -F "$ACTUAL_VERSION" >/dev/null
 
-python3 - <<'PY'
+python3 - "$IMAGE" <<'PY'
 import json
-import os
 import platform
+import sys
 
 with open("dist/build-manifest.json") as f:
     doc = json.load(f)
@@ -37,7 +45,7 @@ assert smoke.get("result") == "pass", doc
 assert doc.get("output_version", "").startswith(doc["claude"]), doc
 doc["ci_acceptance"] = {
     "runtime": "termux-docker/bionic",
-    "termux_docker": os.environ.get("TERMUX_DOCKER_IMAGE", "unknown"),
+    "termux_docker": sys.argv[1],
     "architecture": platform.machine(),
     "version_probe": "pass",
     "tui_smoke": "pass",
@@ -52,7 +60,7 @@ PY
   printf 'target=android-aarch64\n'
   printf 'runtime=bionic\n'
   printf 'architecture=%s\n' "$(uname -m)"
-  printf 'termux_docker=%s\n' "${TERMUX_DOCKER_IMAGE:-unknown}"
+  printf 'termux_docker=%s\n' "$IMAGE"
   printf 'android_api=%s\n' "$(getprop ro.build.version.sdk 2>/dev/null || printf unknown)"
   printf 'android_release=%s\n' "$(getprop ro.build.version.release 2>/dev/null || printf unknown)"
   printf 'bun=%s\n' "$(python3 -c 'import json; print(json.load(open("dist/build-manifest.json"))["base_bun"]["version"])')"

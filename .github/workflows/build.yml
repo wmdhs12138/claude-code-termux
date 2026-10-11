@@ -126,7 +126,7 @@ jobs:
           set -euo pipefail
           docker pull "$TERMUX_DOCKER_IMAGE"
           sudo chmod -R a+rwX "$GITHUB_WORKSPACE"
-          docker run --rm --privileged -e CLAUDE_VERSION_INPUT="$CLAUDE_VERSION" -e TERMUX_DOCKER_IMAGE="$TERMUX_DOCKER_IMAGE" -v "$GITHUB_WORKSPACE:/data/data/com.termux/files/home/claude-code-termux" -w /data/data/com.termux/files/home/claude-code-termux "$TERMUX_DOCKER_IMAGE" bash .github/ci/bionic-build.sh
+          docker run --rm --privileged -v "$GITHUB_WORKSPACE:/data/data/com.termux/files/home/claude-code-termux" -w /data/data/com.termux/files/home/claude-code-termux "$TERMUX_DOCKER_IMAGE" bash .github/ci/bionic-build.sh "$CLAUDE_VERSION" "$TERMUX_DOCKER_IMAGE"
 
       - name: Verify Bionic acceptance manifest
         env:
