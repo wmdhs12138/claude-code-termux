@@ -13,7 +13,8 @@ Checks:
   * Bun.ant.* reads stay inside the known set. runtime/30-peer-credentials.js
     provides getPeerPid/getPeerUid (SO_PEERCRED via bun:ffi) for
     cross-session messaging. memoryPressureLevel/setDumpable are optional probes that
-    degrade by themselves on runtimes that lack them.
+    degrade by themselves on runtimes that lack them; windowsSandboxDeniesArg
+    (2.1.299) is one too, read only when getPlatform() is "windows".
   * Modules that construct Bun.ant.CellSegmenter, together with the modules
     that import the factory wrapping that constructor, only call the native
     members the polyfill implements, and still call every member it relies on.
@@ -46,6 +47,7 @@ KNOWN_BUN_ANT = {
     'getPeerUid',
     'memoryPressureLevel',
     'setDumpable',
+    'windowsSandboxDeniesArg',
 }
 
 REQUIRED_NATIVE = {'segment', 'paint', 'graphemes', 'sgrKeys', 'sgrCloseKeys', 'uris'}

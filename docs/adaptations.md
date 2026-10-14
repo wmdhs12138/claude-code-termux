@@ -119,7 +119,8 @@ Claude 的全屏界面用备用屏幕，启动前打印的这一行会被盖住�
 旧版本会报「the subscription could not be sent」，收件端每条消息都记录一次 `Bun.ant.getPeerPid is not a function`。
 
 `memoryPressureLevel()` 故意不补：Claude 只在 macOS 分支调用它，这里走的 Linux 分支用 `os.freemem()`，而 Bun
-在 Android 上取的就是 `MemAvailable`。
+在 Android 上取的就是 `MemAvailable`。`windowsSandboxDeniesArg()`（2.1.299 起）同理：只在 `getPlatform()` 是
+`windows` 时读，而且是可选调用，缺失时 Windows 沙箱的拒绝列表子命令自己跳过。
 
 ### CellSegmenter
 

@@ -170,6 +170,16 @@ class NativeAbiCheckTests(unittest.TestCase):
         self.assertTrue(report["required"])
         self.assertTrue(report["token_seen"])
 
+    def test_accepts_the_windows_sandbox_probe(self):
+        # 2.1.299 shape: reached only on Windows and optional-chained, so the
+        # Android runtime needs no implementation.
+        src = (
+            b'function EU(){let e=I()==="windows"&&typeof Bun<"u"?'
+            b"Bun.ant?.windowsSandboxDeniesArg?.():void 0;if(typeof e!==\"string\")return}"
+        )
+        report = self.module.analyze(self.graph([("/$bunfs/root/chunk-a.js", src)]))
+        self.assertIn("windowsSandboxDeniesArg", report["bun_ant_members"])
+
     def test_rejects_unknown_bun_ant_interface(self):
         src = b'new Bun.ant.CellSegmenter({}); Bun.ant.TerminalReader'
         with self.assertRaisesRegex(self.module.DriftError, "TerminalReader"):
