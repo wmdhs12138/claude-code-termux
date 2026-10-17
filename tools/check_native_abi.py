@@ -10,11 +10,17 @@ render and shows a blank terminal -- usually discovered by a user, not by CI.
 Scanning the extracted graph makes that a build failure instead.
 
 Checks:
-  * Bun.ant.* reads stay inside the known set. runtime/30-peer-credentials.js
-    provides getPeerPid/getPeerUid (SO_PEERCRED via bun:ffi) for
-    cross-session messaging. memoryPressureLevel/setDumpable are optional probes that
-    degrade by themselves on runtimes that lack them; windowsSandboxDeniesArg
-    (2.1.299) is one too, read only when getPlatform() is "windows".
+  * Bun.ant.* reads (Bun?.ant?.* too) stay inside the known set.
+    runtime/30-peer-credentials.js provides getPeerPid/getPeerUid (SO_PEERCRED
+    via bun:ffi) for cross-session messaging, and runtime/35-login-tty.js
+    provides loginTty (2.1.302), which daemon background workers call on Linux
+    to take their pty as controlling terminal. memoryPressureLevel/setDumpable
+    are optional probes that degrade by themselves on runtimes that lack them.
+    The rest are read only when getPlatform() is "windows"
+    (windowsSandboxDeniesArg since 2.1.299; windowsProcessList,
+    windowsProcessCreationTime and windowsFolderSecurity since 2.1.302) or
+    "macos" (posixFsAt and ttyName, 2.1.302). getPlatform() maps the
+    platform:"linux" the bundler baked in, so Android takes the Linux branch.
   * Modules that construct Bun.ant.CellSegmenter, together with the modules
     that import the factory wrapping that constructor, only call the native
     members the polyfill implements, and still call every member it relies on.
@@ -45,16 +51,23 @@ KNOWN_BUN_ANT = {
     'CellSegmenter',
     'getPeerPid',
     'getPeerUid',
+    'loginTty',
     'memoryPressureLevel',
+    'posixFsAt',
     'setDumpable',
+    'ttyName',
+    'windowsFolderSecurity',
+    'windowsProcessCreationTime',
+    'windowsProcessList',
     'windowsSandboxDeniesArg',
 }
 
 REQUIRED_NATIVE = {'segment', 'paint', 'graphemes', 'sgrKeys', 'sgrCloseKeys', 'uris'}
 KNOWN_NATIVE = REQUIRED_NATIVE | {'setCell'}
 
-BUN_ANT_MEMBER = re.compile(rb'Bun\.ant\??\.([A-Za-z_$][\w$]*)')
-CELL_SEGMENTER = re.compile(rb'Bun\.ant\??\.CellSegmenter')
+# 2.1.302 reads posixFsAt as globalThis.Bun?.ant?.posixFsAt.
+BUN_ANT_MEMBER = re.compile(rb'Bun\??\.ant\??\.([A-Za-z_$][\w$]*)')
+CELL_SEGMENTER = re.compile(rb'Bun\??\.ant\??\.CellSegmenter')
 # Deliberately loose: any mention at all, however it is spelled. Used only to
 # tell "this graph predates the ABI" apart from "the ABI is here but this check
 # can no longer see its call sites".

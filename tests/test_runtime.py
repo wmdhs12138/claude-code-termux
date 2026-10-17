@@ -24,6 +24,15 @@ def assemble_runtime(out_dir):
     return out
 
 
+def find_bun():
+    # Any Bionic Bun will do: one on PATH, this checkout's build cache, or the
+    # cache `claude update` keeps.
+    cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    candidates = [shutil.which("bun"), *sorted(ROOT.glob("work/bun-bases/bun-*/bun")),
+                  *sorted(cache.glob("claude-code-termux/self-update/bun-bases/bun-*/bun"))]
+    return next((str(c) for c in candidates if c and os.access(c, os.X_OK)), None)
+
+
 class RuntimeModuleTests(unittest.TestCase):
     def test_file_implements_the_native_surface(self):
         source = (RUNTIME / "40-cell-segmenter.js").read_text()
@@ -83,12 +92,7 @@ class RuntimeModuleTests(unittest.TestCase):
         self.assertNotIn("CellSegmenter", source)
 
     def test_peer_credentials_read_the_other_process(self):
-        # Any Bionic Bun will do: one on PATH, this checkout's build cache, or
-        # the cache `claude update` keeps.
-        cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
-        candidates = [shutil.which("bun"), *sorted(ROOT.glob("work/bun-bases/bun-*/bun")),
-                      *sorted(cache.glob("claude-code-termux/self-update/bun-bases/bun-*/bun"))]
-        bun = next((str(c) for c in candidates if c and os.access(c, os.X_OK)), None)
+        bun = find_bun()
         if bun is None:
             self.skipTest("no Bun runtime available")
         harness = r"""
@@ -125,6 +129,66 @@ await child.exited;
         self.assertEqual(result["pid"], result["child"])
         self.assertEqual(result["uid"], result["self"])
         self.assertIn("not a socket fd", result["bad"])
+
+    def test_provides_login_tty_without_overriding_native(self):
+        source = (RUNTIME / "35-login-tty.js").read_text()
+        self.assertIn('process.getBuiltinModule("bun:ffi")', source)
+        self.assertIn('dlopen("libc.so"', source)
+        self.assertIn('if (typeof Bun.ant.loginTty === "function") return;', source)
+        self.assertNotIn("CellSegmenter", source)
+
+    def test_login_tty_takes_the_pty_as_controlling_terminal(self):
+        # 2.1.302 background workers call Bun.ant.loginTty(0) and treat a throw
+        # as "ffi_unavailable" and a falsy result as "failed".
+        bun = find_bun()
+        if bun is None:
+            self.skipTest("no Bun runtime available")
+        # login_tty() points fds 1 and 2 at the pty, so the result goes to a file.
+        harness = r"""
+import { closeSync, fstatSync, openSync, readFileSync, writeFileSync } from "fs";
+if (process.platform !== "android") { console.log("SKIP"); process.exit(0); }
+const ctty = () => {
+  // session and tty_nr (the controlling terminal's device, 0 for none)
+  const stat = readFileSync("/proc/self/stat", "utf8");
+  const [, , , session, tty] = stat.slice(stat.lastIndexOf(")") + 2).split(" ").map(Number);
+  let devTty = true;
+  try { closeSync(openSync("/dev/tty", "r+")); } catch { devTty = false; }
+  return { session, tty, devTty };
+};
+let bad;
+try { Bun.ant.loginTty(-1); } catch (e) { bad = e.message; }
+const devNull = openSync("/dev/null", "r");
+// setsid() succeeds and drops any inherited terminal; TIOCSCTTY on a non-tty fails.
+const notTty = Bun.ant.loginTty(devNull);
+const before = ctty();
+const ok = Bun.ant.loginTty(0);
+writeFileSync(process.argv[2], JSON.stringify({
+  bad, notTty, before, ok, after: ctty(), pid: process.pid,
+  pty: fstatSync(0).rdev, out: fstatSync(1).rdev,
+}));
+"""
+        master, slave = pty.openpty()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                script = Path(tmp) / "login-tty.mjs"
+                script.write_text(assemble_runtime(tmp).read_text() + harness)
+                result_path = Path(tmp) / "result.json"
+                proc = subprocess.run([bun, str(script), str(result_path)], stdin=slave,
+                                      text=True, capture_output=True, timeout=30)
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                if proc.stdout.strip() == "SKIP":
+                    self.skipTest("Bun runtime is not Android")
+                result = json.loads(result_path.read_text())
+        finally:
+            os.close(slave)
+            os.close(master)
+        self.assertIn("not a file descriptor", result["bad"])
+        self.assertIs(result["notTty"], False)
+        self.assertEqual(result["before"], {"session": result["pid"], "tty": 0, "devTty": False})
+        self.assertIs(result["ok"], True)
+        self.assertEqual(result["after"],
+                         {"session": result["pid"], "tty": result["pty"], "devTty": True})
+        self.assertEqual(result["out"], result["pty"])
 
 
 class SelfUpdateTests(unittest.TestCase):

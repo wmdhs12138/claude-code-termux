@@ -94,6 +94,7 @@ official Claude Code linux-arm64
        ├─ Android defaults
        ├─ Bionic `claude update`
        ├─ Bun.ant.getPeerPid / getPeerUid
+       ├─ Bun.ant.loginTty
        └─ Bun.ant.CellSegmenter
                 │ graft
                 ▼

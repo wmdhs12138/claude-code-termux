@@ -52,6 +52,7 @@ Claude 的自动更新组件在 TUI 挂载时和之后每 30 分钟调用一次 
 | `10-android-defaults.js` | 默认 `USE_BUILTIN_RIPGREP=0`（内嵌的 ripgrep 链接 glibc，Grep 工具改用 Termux 的 `rg`）。自动更新不再默认关闭：`native_updater` 已经把它的安装改到本地构建。 |
 | `20-self-update.js` + `self-update.sh` | 在 Claude 的 CLI 看到参数之前拦截 `claude update` / `upgrade`，执行 `self-update.sh`；提供自动更新用的 `__claudeTermuxInstallLatest`；关掉自动更新时在交互式启动里打印更新提示。见下文。 |
 | `30-peer-credentials.js` | 提供 `Bun.ant.getPeerPid(fd)` / `getPeerUid(fd)`：首次调用时用 `bun:ffi` 打开 Bionic 的 `libc.so`，以 `getsockopt(SO_PEERCRED)` 读取对端的 `struct ucred`。 |
+| `35-login-tty.js` | 提供 `Bun.ant.loginTty(fd)`：首次调用时用 `bun:ffi` 打开 Bionic 的 `libc.so`，调用 `login_tty(3)`，成功返回 `true`。 |
 | `40-cell-segmenter.js` | 纯 JS 实现的 `Bun.ant.CellSegmenter`。 |
 
 ### `claude update`
@@ -120,7 +121,18 @@ Claude 的全屏界面用备用屏幕，启动前打印的这一行会被盖住�
 
 `memoryPressureLevel()` 故意不补：Claude 只在 macOS 分支调用它，这里走的 Linux 分支用 `os.freemem()`，而 Bun
 在 Android 上取的就是 `MemAvailable`。`windowsSandboxDeniesArg()`（2.1.299 起）同理：只在 `getPlatform()` 是
-`windows` 时读，而且是可选调用，缺失时 Windows 沙箱的拒绝列表子命令自己跳过。
+`windows` 时读，而且是可选调用，缺失时 Windows 沙箱的拒绝列表子命令自己跳过。2.1.302 新增的几个也不补：
+`windowsProcessList`、`windowsProcessCreationTime`、`windowsFolderSecurity` 只在 `windows` 分支读，`posixFsAt`、
+`ttyName` 只在 `macos` 分支读。`getPlatform()` 判断的是打包时写死的 `platform:"linux"`，Android 走 Linux 分支，
+这几个都不会被调用。
+
+### 后台会话为什么需要 loginTty
+
+daemon 拉起的后台会话（`CLAUDE_BG_BACKEND=daemon`）启动时调用 `Bun.ant.loginTty(0)`，把所在的 pty 设成控制终端。
+有了控制终端，pty 挂断时内核发出的 SIGHUP 会让 worker 正常退出（没有控制终端时 worker 忽略 SIGHUP），它运行的命令
+也能打开 `/dev/tty`。2.1.301 及以前是 Claude 自己用 `bun:ffi` 依次在 `libc.so.6`、`libutil.so.1`、`libc.so` 里找
+`login_tty`，Android 上最后一个能找到；2.1.302 改成调用私有运行时的接口。不补的话，worker 把 `bg_worker_ctty`
+记为 `ffi_unavailable`，在没有控制终端的情况下继续运行。
 
 ### CellSegmenter
 

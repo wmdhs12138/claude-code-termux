@@ -180,6 +180,33 @@ class NativeAbiCheckTests(unittest.TestCase):
         report = self.module.analyze(self.graph([("/$bunfs/root/chunk-a.js", src)]))
         self.assertIn("windowsSandboxDeniesArg", report["bun_ant_members"])
 
+    def test_accepts_the_2_1_302_interfaces(self):
+        # getPlatform() reads platform:"linux" baked in by the bundler, so the
+        # Windows and macOS branches below never run on Android. loginTty is
+        # reached on Linux and is provided by runtime/35-login-tty.js.
+        sources = [
+            ("/$bunfs/root/chunk-proc.js",
+             b'function XLo(e){try{return Bun.ant.windowsProcessCreationTime(e)??void 0}catch{return}}'
+             b'function Cd(e){if(typeof Bun>"u"||typeof Bun.ant?.windowsProcessList!=="function")return;'
+             b"let n=Bun.ant.windowsProcessList()}"),
+            ("/$bunfs/root/chunk-acl.js",
+             b'function lU(){if(I()!=="windows")return null;'
+             b'let e=typeof Bun>"u"?void 0:Bun.ant?.windowsFolderSecurity}'),
+            # Bun?.ant?: the only read of posixFsAt outside a log message.
+            ("/$bunfs/root/chunk-anchor.js",
+             b"function kn(){let e=globalThis.Bun?.ant?.posixFsAt;"
+             b'return typeof e?.openat==="function"?e:null}'),
+            ("/$bunfs/root/chunk-stdout.js",
+             b'case"macos":{let d=Y(e)}function Y(e){try{return Bun.ant.ttyName(e)??void 0}catch{return}}'),
+            ("/$bunfs/root/chunk-ctty.js",
+             b'let e;try{e=Bun.ant.loginTty(0)}catch(n){return"ffi_unavailable"}'
+             b'if(!e)return"failed";return"acquired"'),
+        ]
+        report = self.module.analyze(self.graph(sources))
+        for member in ("loginTty", "posixFsAt", "ttyName", "windowsFolderSecurity",
+                       "windowsProcessCreationTime", "windowsProcessList"):
+            self.assertIn(member, report["bun_ant_members"])
+
     def test_rejects_unknown_bun_ant_interface(self):
         src = b'new Bun.ant.CellSegmenter({}); Bun.ant.TerminalReader'
         with self.assertRaisesRegex(self.module.DriftError, "TerminalReader"):
