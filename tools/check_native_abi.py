@@ -21,6 +21,11 @@ Checks:
     windowsProcessCreationTime and windowsFolderSecurity since 2.1.302) or
     "macos" (posixFsAt and ttyName, 2.1.302). getPlatform() maps the
     platform:"linux" the bundler baked in, so Android takes the Linux branch.
+    withThreadWorkingDirectory (2.1.317) starts ripgrep inside a held directory
+    fd for Grep/Glob on macOS. Its branch needs O_NOFOLLOW_ANY, which the
+    linux-arm64 bundle bakes in as 0, and is skipped anyway when
+    /proc/self/fd/N resolves, so spawnDirFd stays unset and the call is never
+    reached.
   * Modules that construct Bun.ant.CellSegmenter, together with the modules
     that import the factory wrapping that constructor, only call the native
     members the polyfill implements, and still call every member it relies on.
@@ -60,6 +65,7 @@ KNOWN_BUN_ANT = {
     'windowsProcessCreationTime',
     'windowsProcessList',
     'windowsSandboxDeniesArg',
+    'withThreadWorkingDirectory',
 }
 
 REQUIRED_NATIVE = {'segment', 'paint', 'graphemes', 'sgrKeys', 'sgrCloseKeys', 'uris'}

@@ -207,6 +207,22 @@ class NativeAbiCheckTests(unittest.TestCase):
                        "windowsProcessCreationTime", "windowsProcessList"):
             self.assertIn(member, report["bun_ant_members"])
 
+    def test_accepts_the_macos_held_directory_spawn(self):
+        # 2.1.317 Grep/Glob: the held-directory branch needs O_NOFOLLOW_ANY,
+        # baked in as 0 (Xre) in the linux-arm64 bundle, so spawnDirFd stays
+        # unset on Android and ripgrep is spawned by path.
+        sources = [
+            ("/$bunfs/root/chunk-open.js",
+             b'if(!z&&Xre!==0&&_$())if(typeof Bun<"u"&&typeof Bun.ant?.withThreadWorkingDirectory==="function")'
+             b'{O=await v$(Z,Fd.O_RDONLY|Fd.O_DIRECTORY|Xre)}else{t("this runtime lacks '
+             b'Bun.ant.withThreadWorkingDirectory")}'),
+            ("/$bunfs/root/chunk-spawn.js",
+             b'if(I===void 0)Ce=V0(D,Z,pe);else{try{if(typeof Bun<"u")'
+             b"Bun.ant?.withThreadWorkingDirectory?.(I,()=>{Ce=V0(D,Z,pe)})}catch(Dt){throw Dt}}"),
+        ]
+        report = self.module.analyze(self.graph(sources))
+        self.assertIn("withThreadWorkingDirectory", report["bun_ant_members"])
+
     def test_rejects_unknown_bun_ant_interface(self):
         src = b'new Bun.ant.CellSegmenter({}); Bun.ant.TerminalReader'
         with self.assertRaisesRegex(self.module.DriftError, "TerminalReader"):

@@ -124,7 +124,9 @@ Claude 的全屏界面用备用屏幕，启动前打印的这一行会被盖住�
 `windows` 时读，而且是可选调用，缺失时 Windows 沙箱的拒绝列表子命令自己跳过。2.1.302 新增的几个也不补：
 `windowsProcessList`、`windowsProcessCreationTime`、`windowsFolderSecurity` 只在 `windows` 分支读，`posixFsAt`、
 `ttyName` 只在 `macos` 分支读。`getPlatform()` 判断的是打包时写死的 `platform:"linux"`，Android 走 Linux 分支，
-这几个都不会被调用。
+这几个都不会被调用。2.1.317 新增的 `withThreadWorkingDirectory` 也不补：它是 macOS 上 Grep / Glob 在已打开的目录 fd
+里启动 ripgrep 用的，这条分支要求 `O_NOFOLLOW_ANY` 非 0，而 linux-arm64 包里这个常量打包时就写成了 0；Linux 上
+`/proc/self/fd/N` 能解析时也不会进这条分支。`spawnDirFd` 因此始终为空，ripgrep 按路径启动，这个接口不会被调用。
 
 ### 后台会话为什么需要 loginTty
 
