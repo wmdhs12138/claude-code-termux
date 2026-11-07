@@ -1,8 +1,8 @@
 {
   "base_bun": {
-    "version": "1.4.3+c6da4a4d3",
-    "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.3/bun-linux-aarch64-android.zip",
-    "archive_sha256": "e8848b6c67769ef1dcf932c1aabafbeaefdea0dd98f715e9455424998242deda",
-    "binary_sha256": "2b5881c336d40ec07543f680a0c41047a113993e6e15ff904255a58597d3f8d2"
+    "version": "1.4.4+38afee6c8",
+    "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-aarch64-android.zip",
+    "archive_sha256": "d72e42c60e895ccbc16144bb1e0e0ad7ee384841c35b5501a7ec28b4d6d759c9",
+    "binary_sha256": "461fda703381e03e8856791cd57093cd79b8f05f2ee262bc69f16c27d2c5575e"
   }
 }
