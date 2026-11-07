@@ -217,6 +217,16 @@ class BionicCIWiringTests(unittest.TestCase):
         self.assertIn('smoke.get("ran") is True', self.script)
         self.assertIn('smoke.get("result") == "pass"', self.script)
 
+    def test_bionic_path_runs_the_runtime_tests_on_the_built_base(self):
+        # The x64 tests job can only skip them; here they must run, on the
+        # base this build used, before the acceptance is recorded.
+        run = self.script.index("python3 -m unittest -v test_runtime.RuntimeModuleTests")
+        self.assertIn('CLAUDE_CODE_TERMUX_TEST_BUN="$ROOT/work/bun-bases/bun-$BASE_SHA/bun"', self.script)
+        self.assertIn("CLAUDE_CODE_TERMUX_REQUIRE_BIONIC=1", self.script)
+        self.assertLess(self.script.index('bash scripts/build.sh "$VERSION"'), run)
+        self.assertLess(run, self.script.index('"runtime_tests": "pass"'))
+        self.assertIn('assert doc["ci_acceptance"]["runtime_tests"] == "pass"', self.workflow)
+
     def test_binary_is_not_selected_for_artifact_upload(self):
         upload = self.workflow.split(
             "- name: Upload Bionic reports (no binary)", 1

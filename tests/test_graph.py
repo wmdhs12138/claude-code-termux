@@ -101,10 +101,12 @@ class NativeAbiCheckTests(unittest.TestCase):
         spec.loader.exec_module(cls.module)
 
     @staticmethod
-    def graph(sources):
+    def graph(sources, entry=b""):
+        # Module 0 is the entry, like /$bunfs/root/cli; runtime/ is embedded
+        # into it and the rest load after it, unless entry imports them.
         payload = bytearray()
         records = []
-        for name, src in sources:
+        for name, src in [("/$bunfs/root/cli", entry), *sources]:
             src_off = len(payload)
             payload += src
             name_bytes = name.encode()
@@ -222,6 +224,35 @@ class NativeAbiCheckTests(unittest.TestCase):
         ]
         report = self.module.analyze(self.graph(sources))
         self.assertIn("withThreadWorkingDirectory", report["bun_ant_members"])
+
+    # 2.1.319 node:vm hardening, which runtime/45-vm-context-global.js serves.
+    VM_GUARD = (b'import{isContext as c}from"vm";var{isProxy:u}=d,s=c,'
+                b'r=typeof Bun>"u"?void 0:Bun.ant?.isVmContextGlobal,f=Hp();'
+                b'function eYi(t,e){if(e!==void 0&&f&&!s(e)&&r?.(e)!==!0)throw Error('
+                b'"Refusing to make a node:vm context: this Bun cannot recognize a context\'s global")}')
+
+    def test_accepts_the_vm_context_global_hook(self):
+        report = self.module.analyze(self.graph(
+            [("/$bunfs/root/chunk-env.js", b'process.env.X="1";'),
+             ("/$bunfs/root/chunk-vm.js", self.VM_GUARD)],
+            entry=b'import"/$bunfs/root/chunk-env.js";await import("/$bunfs/root/chunk-vm.js")'))
+        self.assertIn("isVmContextGlobal", report["bun_ant_members"])
+        self.assertEqual(report["entry_static_closure"], 2)
+
+    def test_rejects_a_bun_ant_read_the_entry_imports_statically(self):
+        # Statically imported modules are evaluated before the entry module's
+        # body, where runtime/ lives: r would keep undefined. Every spelling of
+        # a static import counts, however deep, but import() does not.
+        for entry in (b'import"/$bunfs/root/chunk-vm.js";',
+                      b'import{eYi}from"/$bunfs/root/chunk-vm.js";',
+                      b'import*as v from"/$bunfs/root/chunk-vm.js";',
+                      b'console.log(1);import{x}from"/$bunfs/root/chunk-mid.js";'):
+            with self.subTest(entry=entry), \
+                    self.assertRaisesRegex(self.module.DriftError, r"chunk-vm\.js read\(s\) Bun\.ant"):
+                self.module.analyze(self.graph(
+                    [("/$bunfs/root/chunk-vm.js", self.VM_GUARD),
+                     ("/$bunfs/root/chunk-mid.js", b'import{eYi}from"/$bunfs/root/chunk-vm.js";var x=1')],
+                    entry=entry))
 
     def test_rejects_unknown_bun_ant_interface(self):
         src = b'new Bun.ant.CellSegmenter({}); Bun.ant.TerminalReader'

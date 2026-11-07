@@ -95,7 +95,8 @@ official Claude Code linux-arm64
        ├─ Bionic `claude update`
        ├─ Bun.ant.getPeerPid / getPeerUid
        ├─ Bun.ant.loginTty
-       └─ Bun.ant.CellSegmenter
+       ├─ Bun.ant.CellSegmenter
+       └─ Bun.ant.isVmContextGlobal
                 │ graft
                 ▼
           pinned Bionic Bun

@@ -145,6 +145,7 @@ jobs:
           assert doc["ci_acceptance"]["runtime"] == "termux-docker/bionic", doc
           assert doc["ci_acceptance"]["architecture"] == "aarch64", doc
           assert doc["ci_acceptance"]["version_probe"] == "pass", doc
+          assert doc["ci_acceptance"]["runtime_tests"] == "pass", doc
           print(json.dumps(doc, indent=2))
           PY
 

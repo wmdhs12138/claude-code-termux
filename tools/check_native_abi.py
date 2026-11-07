@@ -26,6 +26,16 @@ Checks:
     linux-arm64 bundle bakes in as 0, and is skipped anyway when
     /proc/self/fd/N resolves, so spawnDirFd stays unset and the call is never
     reached.
+    runtime/45-vm-context-global.js provides isVmContextGlobal (2.1.319):
+    Claude refuses to create a node:vm context (Code Mode, workflows,
+    function hooks) unless it recognizes the context's global, and treats such
+    globals as vm objects when it walks data leaving a sandbox.
+  * No module in the entry module's static import closure reads Bun.ant.
+    runtime/ is embedded at the top of the entry module, but the modules it
+    statically imports are evaluated before its body runs. The vm hardening
+    module reads Bun.ant?.isVmContextGlobal once, at module scope; if that
+    module were evaluated first, it would keep `undefined` however correct the
+    shim is. Today all such modules are loaded by dynamic import().
   * Modules that construct Bun.ant.CellSegmenter, together with the modules
     that import the factory wrapping that constructor, only call the native
     members the polyfill implements, and still call every member it relies on.
@@ -56,6 +66,7 @@ KNOWN_BUN_ANT = {
     'CellSegmenter',
     'getPeerPid',
     'getPeerUid',
+    'isVmContextGlobal',
     'loginTty',
     'memoryPressureLevel',
     'posixFsAt',
@@ -81,6 +92,10 @@ CELL_SEGMENTER_TOKEN = re.compile(rb'CellSegmenter')
 NATIVE_MEMBER = re.compile(rb'\.native\.([A-Za-z_$][\w$]*)')
 SET_CELL = re.compile(rb'\.setCell\s*\(')
 FUNCTION_DECL = re.compile(rb'function\s+([\w$]+)\s*\(')
+# A static import as the bundler writes it: import"m"; import{a}from"m";
+# import*as n from"m". import("m") and import.meta are not matched.
+STATIC_IMPORT = re.compile(
+    rb'(?:^|[;\n}])\s*import\s*(?:[\w$*{][^;"\']*?from\s*)?["\'](/\$bunfs/[^"\']+)["\']')
 EXPORT_LIST = re.compile(rb'export\s*\{([^}]*)\}')
 IMPORT_LIST = re.compile(rb'import\s*\{([^}]*)\}\s*from\s*["\']([^"\']+)["\']')
 
@@ -91,13 +106,29 @@ class DriftError(Exception):
 
 def module_records(data):
     n = len(data)
-    byte_count, mod_off, mod_len, *_ = struct.unpack_from('<QIIIIII', data, n - 48)
+    byte_count, mod_off, mod_len, entry, *_ = struct.unpack_from('<QIIIIII', data, n - 48)
     stride = 52 if mod_len % 52 == 0 else 36
     if stride != 52:
         raise DriftError(f'unsupported module stride {stride}')
     if byte_count != n - 48:
         raise DriftError('byte_count does not match the payload length')
-    return mod_off, mod_len, stride, mod_len // stride
+    if entry >= mod_len // stride:
+        raise DriftError(f'entry point {entry} is outside {mod_len // stride} modules')
+    return mod_off, mod_len, stride, mod_len // stride, entry
+
+
+def static_closure(modules, entry):
+    """Names of the entry module and every module it reaches through static
+    imports: all of them are evaluated before the entry module's body."""
+    sources = dict(modules)
+    seen, stack = set(), [modules[entry][0]]
+    while stack:
+        name = stack.pop()
+        if name in seen or name not in sources:
+            continue
+        seen.add(name)
+        stack += [m.group(1).decode('utf-8', 'replace') for m in STATIC_IMPORT.finditer(sources[name])]
+    return seen
 
 
 def specifiers(clause):
@@ -129,7 +160,7 @@ def basename(path):
 
 
 def analyze(data):
-    mod_off, mod_len, stride, count = module_records(data)
+    mod_off, mod_len, stride, count, entry = module_records(data)
     modules = []
     for i in range(count):
         rec = mod_off + i * stride
@@ -191,6 +222,14 @@ def analyze(data):
         raise DriftError(
             'new Bun.ant interface(s) ' + ', '.join(sorted(unknown_ant)) +
             ' appeared; the CellSegmenter polyfill does not implement them')
+    early = static_closure(modules, entry)
+    report['entry_static_closure'] = len(early)
+    early_ant = sorted(name for name, src in modules if name in early and BUN_ANT_MEMBER.search(src))
+    if early_ant:
+        raise DriftError(
+            ', '.join(early_ant) + ' read(s) Bun.ant but the entry module imports it statically, '
+            'so it is evaluated before runtime/ installs its shims and can capture a missing '
+            'member; check how it reads Bun.ant before shipping')
     if not cell_modules:
         if token_seen:
             raise DriftError(

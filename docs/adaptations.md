@@ -54,6 +54,7 @@ Claude 的自动更新组件在 TUI 挂载时和之后每 30 分钟调用一次 
 | `30-peer-credentials.js` | 提供 `Bun.ant.getPeerPid(fd)` / `getPeerUid(fd)`：首次调用时用 `bun:ffi` 打开 Bionic 的 `libc.so`，以 `getsockopt(SO_PEERCRED)` 读取对端的 `struct ucred`。 |
 | `35-login-tty.js` | 提供 `Bun.ant.loginTty(fd)`：首次调用时用 `bun:ffi` 打开 Bionic 的 `libc.so`，调用 `login_tty(3)`，成功返回 `true`。 |
 | `40-cell-segmenter.js` | 纯 JS 实现的 `Bun.ant.CellSegmenter`。 |
+| `45-vm-context-global.js` | 提供 `Bun.ant.isVmContextGlobal(value)`：用 `bun:jsc` 读出对象的 JSC 类，是 `NodeVMGlobalProxy`（`node:vm` 上下文的全局对象）才返回 `true`。见下文。 |
 
 ### `claude update`
 
@@ -136,6 +137,33 @@ daemon 拉起的后台会话（`CLAUDE_BG_BACKEND=daemon`）启动时调用 `Bun
 `login_tty`，Android 上最后一个能找到；2.1.302 改成调用私有运行时的接口。不补的话，worker 把 `bg_worker_ctty`
 记为 `ffi_unavailable`，在没有控制终端的情况下继续运行。
 
+### node:vm 上下文为什么需要 isVmContextGlobal
+
+2.1.319 给 `node:vm` 沙箱加了一层加固，Code Mode（REPL 工具）、workflow 和函数 hook 都通过它创建上下文。创建时
+Claude 先取出上下文的全局对象，认不出就拒绝创建，抛出「Refusing to make a node:vm context: this Bun cannot
+recognize a context's global, so sandbox checks could be bypassed」；之后检查从沙箱出来的数据时，也把这类全局对象
+和 Proxy 一样当作不能按普通数据处理的对象。认的方法是 `vm.isContext(global) || Bun.ant.isVmContextGlobal(global)`。
+Node 的 `vm.isContext()` 对上下文的全局对象返回 `false`，所以要靠这个私有接口。
+
+Bun 1.4.4 的 `vm.isContext()` 碰巧也接受全局对象，不补的话今天也能跑，但那等于把沙箱检查押在一个和 Node 不一致、
+随时可能改掉的行为上：1.4.3 到 1.4.4 之间，`util.types.isProxy()` 对全局对象的返回值就从 `true` 变成了 `false`。
+`45-vm-context-global.js` 按对象本身回答：从外面看，每个 `node:vm` 上下文（`createContext`、`runInNewContext`、
+`Script#runInNewContext`）的全局对象都是 JSC 里 `NodeVMGlobalProxy` 类的 cell，脚本造不出这种对象，cell 的类也
+不会变。`bun:jsc` 的 `describe()` 能读出类名；`describeArray()` 能看出有没有 butterfly，全局代理从来没有（属性都在
+它背后的全局对象上），所以有 butterfly 的对象不必让 `describe()` 打印整张属性表就能排除。Proxy 先排除，不会触发
+trap；本 realm 的普通对象和数组按原型直接排除，沙箱里的代码拿不到本 realm 的原型，换不进去。结果按对象缓存。
+普通对象约 0.02 µs，其他对象第一次约 3.5 µs，之后约 0.05 µs。
+
+两点由构建守住。`describe()` 的指针用 libc 的 `%p` 打印，空指针在 Windows、glibc、Bionic 上写法各不相同，
+所以 `tests/test_runtime.py` 的检查必须在 Bionic 上跑：CI 的 Bionic 任务用刚构建时的底座运行它，跳过算失败。
+Claude 在加载那个加固模块时只读一次 `Bun.ant?.isVmContextGlobal`，这个模块要是在 runtime/ 之前求值，补上的接口
+就永远读不到；它现在由 `import()` 动态加载，`check_native_abi.py` 检查入口模块的静态导入闭包里没有读 `Bun.ant` 的
+模块。
+
+另外，Code Mode 自己的引擎检查（全局对象上 `defineProperty` 的几种拒绝情况、thenable 回调所属的 realm）在
+standalone 可执行文件里会被跳过，因为官方信任它打包的运行时，而这里打包的是官方 Bun。把 2.1.319 的检查代码原样拿到
+Bun 1.4.4 上跑，结果是 `passed`。
+
 ### CellSegmenter
 
 从 2.1.271 起，Claude 的 Ink 渲染器通过 Anthropic 私有运行时的 `Bun.ant.CellSegmenter` 做字形切分和画格子。
@@ -149,7 +177,7 @@ Bionic Bun 没有这个接口，渲染器在第一帧抛错，表现为终端一
 | 步骤 | 拦下什么 |
 | --- | --- |
 | `fetch-claude.sh` | 官方二进制的 SHA-256 和大小必须与 Anthropic 发布清单一致 |
-| `tools/check_native_abi.py` | `Bun.ant.*` 出现新成员，或 CellSegmenter 的调用面与 `40-cell-segmenter.js` 不一致（多了、少了、换了写法导致看不见调用点）。会跟着导入去找挪到别的 chunk 里的工厂函数 |
+| `tools/check_native_abi.py` | `Bun.ant.*` 出现新成员，或 CellSegmenter 的调用面与 `40-cell-segmenter.js` 不一致（多了、少了、换了写法导致看不见调用点）。会跟着导入去找挪到别的 chunk 里的工厂函数。入口模块静态导入的模块读 `Bun.ant` 也算失败：它们在 runtime/ 之前求值 |
 | `tools/adapt_graph.py` | 找不到 `searchToolsOptIn()` 的 getter，或补丁没有任何模块记录覆盖（补了也不会生效） |
 | `tools/assemble_runtime.py` | `__include__` 的文件不存在或名字不是普通文件名 |
 | `tools/verify_graft.py` | 不执行二进制，按运行时启动时的路径走一遍嫁接链：`.bun` 大小字段 → 长度前缀 → 尾标 → Offsets → 模块表 |

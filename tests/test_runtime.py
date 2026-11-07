@@ -24,13 +24,28 @@ def assemble_runtime(out_dir):
     return out
 
 
+# The Bionic job in CI names the Bun base it has just built with and sets
+# CLAUDE_CODE_TERMUX_REQUIRE_BIONIC=1: there, a test that needs Bionic Bun and
+# cannot run fails instead of skipping.
+TEST_BUN = os.environ.get("CLAUDE_CODE_TERMUX_TEST_BUN")
+REQUIRE_BIONIC = os.environ.get("CLAUDE_CODE_TERMUX_REQUIRE_BIONIC") == "1"
+
+
 def find_bun():
-    # Any Bionic Bun will do: one on PATH, this checkout's build cache, or the
-    # cache `claude update` keeps.
+    # CLAUDE_CODE_TERMUX_TEST_BUN, else any Bionic Bun: one on PATH, this
+    # checkout's build cache, or the cache `claude update` keeps.
+    if TEST_BUN:
+        return TEST_BUN
     cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
     candidates = [shutil.which("bun"), *sorted(ROOT.glob("work/bun-bases/bun-*/bun")),
                   *sorted(cache.glob("claude-code-termux/self-update/bun-bases/bun-*/bun"))]
     return next((str(c) for c in candidates if c and os.access(c, os.X_OK)), None)
+
+
+def skip_without_bionic(test, reason):
+    if REQUIRE_BIONIC:
+        test.fail(f"{reason}, but CLAUDE_CODE_TERMUX_REQUIRE_BIONIC=1")
+    test.skipTest(reason)
 
 
 class RuntimeModuleTests(unittest.TestCase):
@@ -94,7 +109,7 @@ class RuntimeModuleTests(unittest.TestCase):
     def test_peer_credentials_read_the_other_process(self):
         bun = find_bun()
         if bun is None:
-            self.skipTest("no Bun runtime available")
+            skip_without_bionic(self, "no Bun runtime available")
         harness = r"""
 import { connect } from "net";
 if (process.platform !== "android") { console.log("SKIP"); process.exit(0); }
@@ -124,7 +139,7 @@ await child.exited;
                                   text=True, capture_output=True, timeout=30)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         if proc.stdout.strip() == "SKIP":
-            self.skipTest("Bun runtime is not Android")
+            skip_without_bionic(self, "Bun runtime is not Android")
         result = json.loads(proc.stdout)
         self.assertEqual(result["pid"], result["child"])
         self.assertEqual(result["uid"], result["self"])
@@ -142,7 +157,7 @@ await child.exited;
         # as "ffi_unavailable" and a falsy result as "failed".
         bun = find_bun()
         if bun is None:
-            self.skipTest("no Bun runtime available")
+            skip_without_bionic(self, "no Bun runtime available")
         # login_tty() points fds 1 and 2 at the pty, so the result goes to a file.
         harness = r"""
 import { closeSync, fstatSync, openSync, readFileSync, writeFileSync } from "fs";
@@ -177,7 +192,7 @@ writeFileSync(process.argv[2], JSON.stringify({
                                       text=True, capture_output=True, timeout=30)
                 self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
                 if proc.stdout.strip() == "SKIP":
-                    self.skipTest("Bun runtime is not Android")
+                    skip_without_bionic(self, "Bun runtime is not Android")
                 result = json.loads(result_path.read_text())
         finally:
             os.close(slave)
@@ -189,6 +204,86 @@ writeFileSync(process.argv[2], JSON.stringify({
         self.assertEqual(result["after"],
                          {"session": result["pid"], "tty": result["pty"], "devTty": True})
         self.assertEqual(result["out"], result["pty"])
+
+    def test_provides_is_vm_context_global_without_overriding_native(self):
+        source = (RUNTIME / "45-vm-context-global.js").read_text()
+        self.assertIn('if (typeof Bun.ant.isVmContextGlobal === "function") return;', source)
+        self.assertIn('"NodeVMGlobalProxy"', source)
+        self.assertIn('process.getBuiltinModule("bun:jsc")', source)
+        self.assertNotIn("CellSegmenter", source)
+
+    def test_is_vm_context_global_recognizes_exactly_the_context_globals(self):
+        # 2.1.319 refuses to create a node:vm context (Code Mode, workflows,
+        # function hooks) unless vm.isContext() or Bun.ant.isVmContextGlobal()
+        # recognizes its global, and treats such globals as vm objects when it
+        # walks sandbox output. The shim reads the cell's class through
+        # bun:jsc, whose describe() output uses the libc's %p: only a Bionic
+        # run says it parses here. A base whose globals are not
+        # NodeVMGlobalProxy cells (1.4.3) fails this.
+        bun = find_bun()
+        if bun is None:
+            skip_without_bionic(self, "no Bun runtime available")
+        harness = r"""
+import * as vm from "vm";
+if (process.platform !== "android") { console.log("SKIP"); process.exit(0); }
+const is = Bun.ant.isVmContextGlobal;
+const noCodegen = { codeGeneration: { strings: false, wasm: false } };
+const global = (context) => vm.runInContext("this", context);
+const plain = vm.createContext({});
+// Stuffed from both sides, and reparented from inside: still a global proxy.
+vm.runInContext("for (let i = 0; i < 500; i++) globalThis['p' + i] = i; globalThis[0] = 1; var v = 1", plain);
+global(plain).outside = 1;
+const reparented = vm.createContext({});
+vm.runInContext("Object.setPrototypeOf(globalThis, null)", reparented);
+const globals = {
+  createContext: global(plain),
+  hardened: global(vm.createContext({ __proto__: null }, noCodegen)),
+  codeMode: global(vm.createContext({ __proto__: null }, { ...noCodegen, importModuleDynamically: () => {} })),
+  runInNewContext: vm.runInNewContext("this"),
+  scriptRunInNewContext: new vm.Script("this").runInNewContext({}),
+  reparented: global(reparented),
+};
+const traps = [];
+const spy = (target) => new Proxy(target, Object.fromEntries(
+  ["get", "has", "ownKeys", "getPrototypeOf", "getOwnPropertyDescriptor"].map((t) => [t, (...a) => (traps.push(t), Reflect[t](...a))])));
+const revoked = Proxy.revocable({}, {}); revoked.revoke();
+class Thing {}
+const others = {
+  sandbox: plain, mainGlobal: globalThis, empty: {}, nullProto: { __proto__: null },
+  wide: Object.fromEntries(Array.from({ length: 5000 }, (_, i) => ["k" + i, i])),
+  array: [1, 2], vmObject: vm.runInContext("({ a: 1 })", plain), vmArray: vm.runInContext("[1]", plain),
+  vmObjectPrototype: vm.runInContext("Object.prototype", plain), proxy: spy({}), proxyOfGlobal: spy(global(plain)),
+  revoked: revoked.proxy, map: new Map(), error: new Error("x"), instance: new Thing(), fn() {},
+  string: "x", number: 1, nullValue: null, undefinedValue: undefined,
+};
+const result = {
+  shim: Bun.ant.isVmContextGlobal.toString().includes("NodeVMGlobalProxy"),
+  globals: Object.fromEntries(Object.entries(globals).map(([k, v]) => [k, is(v)])),
+  others: Object.fromEntries(Object.entries(others).map(([k, v]) => [k, is(v)])),
+  repeat: is(globals.createContext) && !is(others.vmObject),
+  traps,
+};
+// The 2.1.319 guard, run against a vm.isContext() that rejects a context's
+// global the way Node's does: only the hook can let the context through.
+const nodeIsContext = (v) => vm.isContext(v) && vm.runInContext("this", v) !== v;
+const refuse = (g, hook) => g !== void 0 && !nodeIsContext(g) && hook?.(g) !== true;
+result.nodeSemantics = { withoutHook: refuse(globals.hardened, undefined), withHook: refuse(globals.hardened, is) };
+console.log(JSON.stringify(result));
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / "vm-context-global.mjs"
+            script.write_text(assemble_runtime(tmp).read_text() + harness)
+            proc = subprocess.run([bun, str(script)], text=True, capture_output=True, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        if proc.stdout.strip() == "SKIP":
+            skip_without_bionic(self, "Bun runtime is not Android")
+        result = json.loads(proc.stdout)
+        self.assertIs(result["shim"], True)
+        self.assertEqual([k for k, v in result["globals"].items() if v is not True], [])
+        self.assertEqual([k for k, v in result["others"].items() if v is not False], [])
+        self.assertIs(result["repeat"], True)
+        self.assertEqual(result["traps"], [])
+        self.assertEqual(result["nodeSemantics"], {"withoutHook": True, "withHook": False})
 
 
 class SelfUpdateTests(unittest.TestCase):
@@ -492,14 +587,6 @@ echo "build: OK claude=1.2.4 -> $PWD/dist/claude"
         self.assertNotIn(names[1], remaining)
         self.assertNotIn(names[2], remaining)
         self.assertIn("Bun cache cleanup: 1 retained, 2 removed", proc.stdout)
-
-
-def find_bun():
-    """A Bionic Bun: one on PATH, this checkout's build cache, or `claude update`'s."""
-    cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
-    candidates = [shutil.which("bun"), *sorted(ROOT.glob("work/bun-bases/bun-*/bun")),
-                  *sorted(cache.glob("claude-code-termux/self-update/bun-bases/bun-*/bun"))]
-    return next((str(c) for c in candidates if c and os.access(c, os.X_OK)), None)
 
 
 @unittest.skipUnless(find_bun(), "needs a Bun runtime")
