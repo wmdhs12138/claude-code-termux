@@ -1,5 +1,7 @@
 # claude-code-termux
 
+[English](README.en.md) · 中文
+
 让官方 Claude Code 在 Termux / Android 上原生运行。
 
 本项目提取官方 Linux AArch64 standalone 中的 Claude 模块图，加入 Termux 兼容层，再嫁接到
@@ -78,6 +80,9 @@ CI 每天检查一次。
 ## 使用前请知道
 
 - **没有沙箱隔离。** 命令的约束只剩权限提示，请据此选择权限模式。
+- **自动更新信任本仓库。** 后台更新会下载并运行新 Release 对应的构建脚本；哈希比对防的是构建出错，不是
+  仓库被攻破。不想自动执行就设 `DISABLE_AUTOUPDATER=1`，见
+  [更新信任的是什么](docs/adaptations.md#更新信任的是什么)。
 - **不要分发构建产物。** 生成的 ELF 是 Anthropic 专有程序的修改副本，只供个人研究与自用；
   本仓库和 Release 都不包含 Claude 二进制，请遵守 Anthropic 的许可与服务条款。
 - **私有运行时接口可能变化。** Claude 使用 Anthropic 私有 Bun 的 `Bun.ant.*` 接口，上游一变，

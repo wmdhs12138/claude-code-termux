@@ -84,6 +84,20 @@ Updated Claude Code 2.1.295 → 2.1.296 in 1 min 12 s
 写一行状态。进度条会按终端宽度缩短或截断标签，保证不折行（折行之后 `\r` 无法原地重绘）。失败时更新器给出
 原因、日志的最后 8 行和日志路径。
 
+### 更新信任的是什么
+
+上面的哈希比对防的是构建出错：下载损坏、底座不对、手机上的构建和 CI 的不一致。它不是独立于本仓库的校验：
+Release 的清单、tag 指向的提交和工具链源码都来自同一个 GitHub 仓库，没有签名，也没有钉在已安装二进制里的
+信任锚。官方 Claude 二进制按 Anthropic 的发布清单校验、Bun 底座按 `versions.json` 的哈希校验，但做这两项校验的
+正是刚下载的工具链。
+
+所以更新器信任的是这个仓库：能在这里推送提交并发布 Release 的人（维护者，或拿到其账号、令牌的人），可以让
+每台开着自动更新的设备在下一次检查时下载并运行那个 tag 的 `scripts/build.sh`，以 Termux 用户的权限，没有沙箱。
+这和 `git clone` 之后运行 `./install.sh`、和多数自更新程序是同一种信任，只是这里它在后台自动发生。
+
+不想把这份信任交给后台的话：设 `DISABLE_AUTOUPDATER=1`，只剩一行启动提示；更新前自己看两个 tag 之间的差异
+（Release 说明列出了工具链变更），再运行 `claude update`，或者在审阅过的克隆里 `./install.sh VERSION`。
+
 ### 自动更新：`__claudeTermuxInstallLatest`
 
 `native_updater` 把 `installLatest()` 接到这里。每次调用：
