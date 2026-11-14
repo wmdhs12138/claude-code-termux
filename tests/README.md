@@ -4,7 +4,7 @@
 python3 -m unittest discover -s tests -v
 ```
 
-只需 `bash`、`python3` 和 coreutils，不联网、不下载 Claude，CI 的 `tests` 任务（x64 Ubuntu）和手机上都能跑。有 `node` 或 `bun` 时会额外检查 `runtime/` 的 JS 语法；能找到 Bionic Bun 时（`PATH` 上的 `bun`、本仓库 `work/bun-bases/`，或 `claude update` 的缓存）会在真实 Bionic 运行时上执行 peer 凭据、loginTty 和 isVmContextGlobal 的测试，否则跳过。CI 的 Bionic 任务用 `CLAUDE_CODE_TERMUX_TEST_BUN` 指定刚构建时用的底座、设 `CLAUDE_CODE_TERMUX_REQUIRE_BIONIC=1` 运行 `test_runtime.RuntimeModuleTests`，这时跳过算失败。
+只需 `bash`、`python3` 和 coreutils，不联网、不下载 Claude，CI 的 `tests` 任务（x64 Ubuntu）和手机上都能跑。有 `node` 或 `bun` 时会额外检查 `runtime/` 的 JS 语法；能找到 Bionic Bun 时（`PATH` 上的 `bun`、本仓库 `work/bun-bases/`，或 `claude update` 的缓存）会在真实 Bionic 运行时上执行 peer 凭据、loginTty、isVmContextGlobal、自动更新钩子和启动提示的测试，否则跳过。CI 的 Bionic 任务用 `CLAUDE_CODE_TERMUX_TEST_BUN` 指定刚构建时用的底座、设 `CLAUDE_CODE_TERMUX_REQUIRE_BIONIC=1` 运行 `test_runtime` 里需要 Bun 的三组（`RuntimeModuleTests`、`InstallLatestTests`、`UpdateNoticeTests`），这时跳过算失败。后两组里 Bun 扮演已安装的 claude，版本号取自 `bun --version`，换底座不用改测试。
 
 需要真实 Bionic 和 Claude 二进制的验收（版本探针、PTY 里渲染真实 TUI）不在这里，由 `scripts/build.sh` 对每个候选执行，CI 在 termux-docker 里跑，见 [../docs/ci.md](../docs/ci.md)。
 

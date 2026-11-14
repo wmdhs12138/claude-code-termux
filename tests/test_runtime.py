@@ -4,6 +4,7 @@ import json
 import math
 import os
 import pty
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -40,6 +41,21 @@ def find_bun():
     candidates = [shutil.which("bun"), *sorted(ROOT.glob("work/bun-bases/bun-*/bun")),
                   *sorted(cache.glob("claude-code-termux/self-update/bun-bases/bun-*/bun"))]
     return next((str(c) for c in candidates if c and os.access(c, os.X_OK)), None)
+
+
+def bun_versions():
+    """(installed, newer) for the tests where Bun plays the installed claude:
+    what `bun --version` prints, and the next patch release. Read from the
+    binary, so a new Bun base does not have to be followed here."""
+    bun = find_bun()
+    if bun is None:
+        return None, None
+    out = subprocess.run([bun, "--version"], text=True, capture_output=True, timeout=60).stdout
+    major, minor, patch = map(int, re.match(r"(\d+)\.(\d+)\.(\d+)", out).groups())
+    return f"{major}.{minor}.{patch}", f"{major}.{minor}.{patch + 1}"
+
+
+INSTALLED, NEWER = bun_versions()
 
 
 def skip_without_bionic(test, reason):
@@ -589,7 +605,7 @@ echo "build: OK claude=1.2.4 -> $PWD/dist/claude"
         self.assertIn("Bun cache cleanup: 1 retained, 2 removed", proc.stdout)
 
 
-@unittest.skipUnless(find_bun(), "needs a Bun runtime")
+@unittest.skipUnless(find_bun() or REQUIRE_BIONIC, "needs a Bun runtime")
 class InstallLatestTests(unittest.TestCase):
     """__claudeTermuxInstallLatest, which Claude's auto-updater calls through
     the native_updater adaptation, against a fake GitHub.
@@ -632,25 +648,25 @@ console.log(JSON.stringify(result));
         return (self.cache / "claude-code-termux" / "self-update" / "auto-update.log").read_text()
 
     def test_up_to_date_installs_nothing(self):
-        self.release("v1.4.3-r1", "1.4.3", same_build=True)
+        self.release(f"v{INSTALLED}-r1", INSTALLED, same_build=True)
         before = self.claude.read_bytes()
         self.assertEqual(self.install_latest(),
-                         {"latestVersion": "1.4.3", "wasUpdated": False, "lockFailed": False})
+                         {"latestVersion": INSTALLED, "wasUpdated": False, "lockFailed": False})
         self.assertEqual(self.claude.read_bytes(), before)
-        self.assertIn("is up to date (v1.4.3-r1)", self.log())
+        self.assertIn(f"is up to date (v{INSTALLED}-r1)", self.log())
 
     def test_a_newer_approved_release_is_built_and_swapped_in(self):
-        self.release("v1.4.4", "1.4.4",
-                     build_script=SelfUpdateTests.NOISY_BUILD.replace("1.2.4", "1.4.4"))
+        self.release(f"v{NEWER}", NEWER,
+                     build_script=SelfUpdateTests.NOISY_BUILD.replace("1.2.4", NEWER))
         self.assertEqual(self.install_latest(),
-                         {"latestVersion": "1.4.4", "wasUpdated": True, "lockFailed": False})
+                         {"latestVersion": NEWER, "wasUpdated": True, "lockFailed": False})
         self.assertEqual(subprocess.run([str(self.claude), "--version"], text=True,
-                                        capture_output=True).stdout, "1.4.4 (Claude Code)\n")
-        self.assertIn("Updated Claude Code 1.4.3 → 1.4.4", self.log())
+                                        capture_output=True).stdout, f"{NEWER} (Claude Code)\n")
+        self.assertIn(f"Updated Claude Code {INSTALLED} → {NEWER}", self.log())
         self.assertFalse((self.cache / "claude-code-termux" / "self-update" / "auto-update.lock").exists())
 
     def test_another_session_building_holds_the_lock(self):
-        self.release("v1.4.4", "1.4.4")
+        self.release(f"v{NEWER}", NEWER)
         (self.cache / "claude-code-termux" / "self-update" / "auto-update.lock").mkdir(parents=True)
         self.assertEqual(self.install_latest(),
                          {"latestVersion": None, "wasUpdated": False, "lockFailed": True})
@@ -667,12 +683,12 @@ console.log(JSON.stringify(result));
         self.assertEqual(self.claude.read_bytes(), before)
 
 
-@unittest.skipUnless(find_bun(), "needs a Bun runtime")
+@unittest.skipUnless(find_bun() or REQUIRE_BIONIC, "needs a Bun runtime")
 class UpdateNoticeTests(unittest.TestCase):
     """The startup update notice in 20-self-update.js, run in Bun on a pty.
 
     process.execPath is Bun itself, so Bun plays the installed claude: the
-    background check runs `bun --version` (1.4.3) and hashes the Bun binary.
+    background check runs `bun --version` (INSTALLED) and hashes the Bun binary.
     """
 
     BUN = find_bun()
@@ -765,20 +781,20 @@ class UpdateNoticeTests(unittest.TestCase):
                          "no check may start for scripts or with the notice turned off")
 
     def test_a_replaced_binary_is_checked_again_before_anything_is_shown(self):
-        self.fake_release("v1.4.4", "1.4.4", same_build=False)
+        self.fake_release(f"v{NEWER}", NEWER, same_build=False)
         self.write_cache("Update available: an old result", identity="0:0")
         self.assertNotIn("an old result", self.start())
         self.wait_for_check()
         self.assertEqual(self.cache.read_text().splitlines(), [
-            self.identity, "Update available: Claude Code 1.4.3 → 1.4.4 (v1.4.4); run: claude update"])
-        self.assertIn("Update available: Claude Code 1.4.3 → 1.4.4 (v1.4.4)", self.start())
+            self.identity, f"Update available: Claude Code {INSTALLED} → {NEWER} (v{NEWER}); run: claude update"])
+        self.assertIn(f"Update available: Claude Code {INSTALLED} → {NEWER} (v{NEWER})", self.start())
 
     def test_first_start_checks_and_stays_quiet_when_up_to_date(self):
-        self.fake_release("v1.4.3", "1.4.3", same_build=True)
+        self.fake_release(f"v{INSTALLED}", INSTALLED, same_build=True)
         self.assertEqual(self.start(), "")
         self.wait_for_check()
         self.assertEqual(self.cache.read_text().splitlines(),
-                         [self.identity, "Claude Code 1.4.3 is up to date (v1.4.3)"])
+                         [self.identity, f"Claude Code {INSTALLED} is up to date (v{INSTALLED})"])
         self.assertEqual(self.start(), "")
 
 

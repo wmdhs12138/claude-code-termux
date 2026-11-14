@@ -223,6 +223,9 @@ class BionicCIWiringTests(unittest.TestCase):
         run = self.script.index("python3 -m unittest -v test_runtime.RuntimeModuleTests")
         self.assertIn('CLAUDE_CODE_TERMUX_TEST_BUN="$ROOT/work/bun-bases/bun-$BASE_SHA/bun"', self.script)
         self.assertIn("CLAUDE_CODE_TERMUX_REQUIRE_BIONIC=1", self.script)
+        # The updater tests need a Bun too: left out, nothing in CI runs them.
+        for name in ("InstallLatestTests", "UpdateNoticeTests"):
+            self.assertIn(f"test_runtime.{name}", self.script)
         self.assertLess(self.script.index('bash scripts/build.sh "$VERSION"'), run)
         self.assertLess(run, self.script.index('"runtime_tests": "pass"'))
         self.assertIn('assert doc["ci_acceptance"]["runtime_tests"] == "pass"', self.workflow)

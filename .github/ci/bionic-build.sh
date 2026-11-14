@@ -32,14 +32,17 @@ ACTUAL_VERSION="$(python3 -c 'import json; print(json.load(open("dist/build-mani
 test "$ACTUAL_VERSION" = "$(tr -d '[:space:]' < work/.claude-version)"
 ./dist/claude --version | grep -F "$ACTUAL_VERSION" >/dev/null
 
-# The one exception: RuntimeModuleTests runs the runtime/ shims on Bionic Bun
-# (bun:ffi into Bionic libc, bun:jsc output printed with Bionic's %p), which
-# the x64 tests job can only skip. Run it on the base this build used, and
-# make a test that cannot run there fail instead of skipping.
+# The one exception: the tests that need Bionic Bun, which the x64 tests job
+# can only skip. RuntimeModuleTests runs the runtime/ shims (bun:ffi into
+# Bionic libc, bun:jsc output printed with Bionic's %p); InstallLatestTests and
+# UpdateNoticeTests run the auto-update hook and the startup notice with Bun
+# playing the installed claude. Run them on the base this build used, and make
+# a test that cannot run there fail instead of skipping.
 BASE_SHA="$(python3 -c 'import json; print(json.load(open("dist/build-manifest.json"))["base_bun"]["binary_sha256"])')"
 echo "::group::Bionic runtime tests"
 (cd tests && CLAUDE_CODE_TERMUX_TEST_BUN="$ROOT/work/bun-bases/bun-$BASE_SHA/bun" \
-  CLAUDE_CODE_TERMUX_REQUIRE_BIONIC=1 python3 -m unittest -v test_runtime.RuntimeModuleTests)
+  CLAUDE_CODE_TERMUX_REQUIRE_BIONIC=1 python3 -m unittest -v test_runtime.RuntimeModuleTests \
+    test_runtime.InstallLatestTests test_runtime.UpdateNoticeTests)
 echo "::endgroup::"
 
 python3 - "$IMAGE" <<'PY'
