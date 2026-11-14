@@ -172,7 +172,9 @@ jobs:
 
   release:
     needs: [resolve, bionic]
-    if: needs.resolve.outputs.unreleased == 'true'
+    # Only from main: a build dispatched on another branch (--ref) is for trying a
+    # change, and would otherwise tag a release on a commit main does not have.
+    if: needs.resolve.outputs.unreleased == 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

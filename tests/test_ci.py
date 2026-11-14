@@ -190,6 +190,13 @@ if {fail_first!r} and n == 0:
         self.assertNotIn("toolchain-v", workflow)
         self.assertIn("if: needs.resolve.outputs.unreleased == 'true'", workflow)
 
+    def test_only_main_publishes(self):
+        # A branch dispatch once released a new upstream version from a commit
+        # that was not on main.
+        release = WORKFLOW.read_text().split("\n  release:\n", 1)[1]
+        self.assertIn("if: needs.resolve.outputs.unreleased == 'true' && "
+                      "github.ref == 'refs/heads/main'", release)
+
 
 class BionicCIWiringTests(unittest.TestCase):
     def test_upgrades_termux_before_installing_dependencies(self):

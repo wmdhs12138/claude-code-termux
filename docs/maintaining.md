@@ -20,7 +20,7 @@ scripts/build.sh 2.1.295                 # 官方二进制和 Bun 底座都缓�
 | 嫁接或版本探针（段错误） | 模块图格式随 Bun 版本变了（例如 1.4.3 新增的 flag bit 11/12） | 需要更新的 Bun 底座，见下文；格式细节见 [format.md](format.md) |
 | TUI 冒烟 | 能启动但画不出界面，几乎总是渲染层的私有接口 | 在手机上直接运行 `dist/.claude.new` 看报错 |
 
-手动重跑：`gh workflow run build.yml -f version=<版本>`。
+手动重跑：`gh workflow run build.yml -f version=<版本>`。在分支上验证改动：加 `--ref <分支>`，构建和验收照常进行，但只有 `main` 上的运行会发布 Release。
 
 ## 改运行时（`runtime/`）
 
