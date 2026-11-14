@@ -43,6 +43,11 @@ def find_bun():
     return next((str(c) for c in candidates if c and os.access(c, os.X_OK)), None)
 
 
+# Fixture scripts name the shell that is really there: a Termux without
+# termux-exec's preload (termux-docker) has no /bin/sh.
+SH = shutil.which("sh") or "/bin/sh"
+
+
 def bun_versions():
     """(installed, newer) for the tests where Bun plays the installed claude:
     what `bun --version` prints, and the next patch release. Read from the
@@ -394,7 +399,7 @@ class SelfUpdateTests(unittest.TestCase):
         fake_bin = tmp / "bin"
         fake_bin.mkdir()
         release = f"https://github.com/wmdhs12138/claude-code-termux/releases/tag/{release_tag}"
-        (fake_bin / "curl").write_text(f"""#!/bin/sh
+        (fake_bin / "curl").write_text(f"""#!{SH}
 case "$*" in
   *url_effective*) printf %s "{release}" ;;
   */archive/*)
@@ -404,14 +409,14 @@ case "$*" in
 esac
 """)
         (fake_bin / "git").write_text(
-            f'#!/bin/sh\nprintf "%s\\trefs/tags/%s\\n" "{commit}" "{release_tag}"\n')
+            f'#!{SH}\nprintf "%s\\trefs/tags/%s\\n" "{commit}" "{release_tag}"\n')
         for tool in ("curl", "git"):
             (fake_bin / tool).chmod(0o755)
         return dict(os.environ, PATH=f"{fake_bin}:{os.environ['PATH']}")
 
     @staticmethod
     def fake_claude(path, version):
-        path.write_text(f'#!/bin/sh\necho "{version} (Claude Code)"\n')
+        path.write_text(f'#!{SH}\necho "{version} (Claude Code)"\n')
         path.chmod(0o755)
         return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -469,7 +474,7 @@ if [ -n "${CLAUDE_CODE_TERMUX_PROGRESS_FD:-}" ]; then
   echo "  Building and verifying..." >&"$CLAUDE_CODE_TERMUX_PROGRESS_FD"
 fi
 mkdir -p dist
-printf '#!/bin/sh\\necho "1.2.4 (Claude Code)"\\n' > dist/claude
+printf '#!__SH__\\necho "1.2.4 (Claude Code)"\\n' > dist/claude
 chmod +x dist/claude
 sha="$(sha256sum dist/claude | cut -d' ' -f1)"
 cat > dist/build-manifest.json <<EOF
@@ -479,7 +484,7 @@ cat > dist/build-manifest.json <<EOF
  "output_sha256": "$sha", "tui_smoke": {"ran": true, "result": "pass"}}
 EOF
 echo "build: OK claude=1.2.4 -> $PWD/dist/claude"
-"""
+""".replace("__SH__", SH)
 
     def run_update(self, tmp, build_script):
         tmp = Path(tmp)
@@ -647,11 +652,18 @@ console.log(JSON.stringify(result));
     def log(self):
         return (self.cache / "claude-code-termux" / "self-update" / "auto-update.log").read_text()
 
+    def log_text(self):
+        """The log as a failure message: it says why a check or build failed."""
+        try:
+            return self.log()
+        except OSError:
+            return "(no auto-update.log)"
+
     def test_up_to_date_installs_nothing(self):
         self.release(f"v{INSTALLED}-r1", INSTALLED, same_build=True)
         before = self.claude.read_bytes()
         self.assertEqual(self.install_latest(),
-                         {"latestVersion": INSTALLED, "wasUpdated": False, "lockFailed": False})
+                         {"latestVersion": INSTALLED, "wasUpdated": False, "lockFailed": False}, self.log_text())
         self.assertEqual(self.claude.read_bytes(), before)
         self.assertIn(f"is up to date (v{INSTALLED}-r1)", self.log())
 
@@ -659,7 +671,7 @@ console.log(JSON.stringify(result));
         self.release(f"v{NEWER}", NEWER,
                      build_script=SelfUpdateTests.NOISY_BUILD.replace("1.2.4", NEWER))
         self.assertEqual(self.install_latest(),
-                         {"latestVersion": NEWER, "wasUpdated": True, "lockFailed": False})
+                         {"latestVersion": NEWER, "wasUpdated": True, "lockFailed": False}, self.log_text())
         self.assertEqual(subprocess.run([str(self.claude), "--version"], text=True,
                                         capture_output=True).stdout, f"{NEWER} (Claude Code)\n")
         self.assertIn(f"Updated Claude Code {INSTALLED} → {NEWER}", self.log())
@@ -669,17 +681,17 @@ console.log(JSON.stringify(result));
         self.release(f"v{NEWER}", NEWER)
         (self.cache / "claude-code-termux" / "self-update" / "auto-update.lock").mkdir(parents=True)
         self.assertEqual(self.install_latest(),
-                         {"latestVersion": None, "wasUpdated": False, "lockFailed": True})
+                         {"latestVersion": None, "wasUpdated": False, "lockFailed": True}, self.log_text())
 
     def test_offline_is_nothing_to_do(self):
         fake = self.tmp / "offline"
         fake.mkdir()
-        (fake / "curl").write_text("#!/bin/sh\necho 'curl: (6) Could not resolve host' >&2\nexit 6\n")
+        (fake / "curl").write_text(f"#!{SH}\necho 'curl: (6) Could not resolve host' >&2\nexit 6\n")
         (fake / "curl").chmod(0o755)
         self.env = dict(os.environ, PATH=f"{fake}:{os.environ['PATH']}")
         before = self.claude.read_bytes()
         self.assertEqual(self.install_latest(),
-                         {"latestVersion": None, "wasUpdated": False, "lockFailed": False})
+                         {"latestVersion": None, "wasUpdated": False, "lockFailed": False}, self.log_text())
         self.assertEqual(self.claude.read_bytes(), before)
 
 
