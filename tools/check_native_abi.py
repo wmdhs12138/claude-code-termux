@@ -16,11 +16,14 @@ Checks:
     provides loginTty (2.1.302), which daemon background workers call on Linux
     to take their pty as controlling terminal. memoryPressureLevel/setDumpable
     are optional probes that degrade by themselves on runtimes that lack them.
-    The rest are read only when getPlatform() is "windows"
+    Platform-specific members are read only when getPlatform() is "windows"
     (windowsSandboxDeniesArg since 2.1.299; windowsProcessList,
-    windowsProcessCreationTime and windowsFolderSecurity since 2.1.302) or
-    "macos" (posixFsAt and ttyName, 2.1.302). getPlatform() maps the
-    platform:"linux" the bundler baked in, so Android takes the Linux branch.
+    windowsProcessCreationTime and windowsFolderSecurity since 2.1.302;
+    mxc, the Windows sandbox backend, since 2.1.326) or "macos" (posixFsAt
+    and ttyName, 2.1.302). getPlatform() maps the platform:"linux" the
+    bundler baked in, so Android takes the Linux branch.
+    stringifyToBytes and stringifyToBytesFallbacks (2.1.327) are optional:
+    the native request-body serialization path skips itself if either is absent.
     withThreadWorkingDirectory (2.1.317) starts ripgrep inside a held directory
     fd for Grep/Glob on macOS. Its branch needs O_NOFOLLOW_ANY, which the
     linux-arm64 bundle bakes in as 0, and is skipped anyway when
@@ -69,8 +72,11 @@ KNOWN_BUN_ANT = {
     'isVmContextGlobal',
     'loginTty',
     'memoryPressureLevel',
+    'mxc',
     'posixFsAt',
     'setDumpable',
+    'stringifyToBytes',
+    'stringifyToBytesFallbacks',
     'ttyName',
     'windowsFolderSecurity',
     'windowsProcessCreationTime',
