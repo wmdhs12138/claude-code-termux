@@ -182,6 +182,24 @@ class NativeAbiCheckTests(unittest.TestCase):
         report = self.module.analyze(self.graph([("/$bunfs/root/chunk-a.js", src)]))
         self.assertIn("windowsSandboxDeniesArg", report["bun_ant_members"])
 
+    def test_accepts_the_windows_mxc_backend(self):
+        src = (
+            b'function hasMxc(){return getPlatform()==="windows"&&globalThis.Bun?.ant?.mxc!==void 0}'
+            b'function getMxc(){return getPlatform()==="windows"?globalThis.Bun?.ant?.mxc:void 0}'
+        )
+        report = self.module.analyze(self.graph([("/$bunfs/root/chunk-sandbox.js", src)]))
+        self.assertIn("mxc", report["bun_ant_members"])
+
+    def test_accepts_the_optional_request_body_serializer(self):
+        src = (
+            b'function bodyBytes(body){let serialize=Bun.ant?.stringifyToBytes,'
+            b'fallbacks=Bun.ant?.stringifyToBytesFallbacks;'
+            b'if(serialize===void 0||fallbacks===void 0)return;'
+            b'let before=fallbacks(),bytes=serialize(body);if(fallbacks()===before)return bytes}'
+        )
+        report = self.module.analyze(self.graph([("/$bunfs/root/chunk-api.js", src)]))
+        self.assertEqual(report["bun_ant_members"], ["stringifyToBytes", "stringifyToBytesFallbacks"])
+
     def test_accepts_the_2_1_302_interfaces(self):
         # getPlatform() reads platform:"linux" baked in by the bundler, so the
         # Windows and macOS branches below never run on Android. loginTty is
