@@ -24,6 +24,8 @@ Checks:
     bundler baked in, so Android takes the Linux branch.
     stringifyToBytes and stringifyToBytesFallbacks (2.1.327) are optional:
     the native request-body serialization path skips itself if either is absent.
+    disableCrashReportUpload and enableCrashReportUpload (2.1.331) are called
+    with optional chaining, so Bionic Bun can leave both hooks absent.
     withThreadWorkingDirectory (2.1.317) starts ripgrep inside a held directory
     fd for Grep/Glob on macOS. Its branch needs O_NOFOLLOW_ANY, which the
     linux-arm64 bundle bakes in as 0, and is skipped anyway when
@@ -67,6 +69,8 @@ import sys
 
 KNOWN_BUN_ANT = {
     'CellSegmenter',
+    'disableCrashReportUpload',
+    'enableCrashReportUpload',
     'getPeerPid',
     'getPeerUid',
     'isVmContextGlobal',
