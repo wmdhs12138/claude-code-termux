@@ -200,6 +200,15 @@ class NativeAbiCheckTests(unittest.TestCase):
         report = self.module.analyze(self.graph([("/$bunfs/root/chunk-api.js", src)]))
         self.assertEqual(report["bun_ant_members"], ["stringifyToBytes", "stringifyToBytesFallbacks"])
 
+    def test_accepts_optional_crash_report_upload_hooks(self):
+        src = (
+            b'function refreshCrashReporting(enabled){'
+            b'if(enabled){globalThis.Bun?.ant?.enableCrashReportUpload?.();return}'
+            b'globalThis.Bun?.ant?.disableCrashReportUpload?.()}'
+        )
+        report = self.module.analyze(self.graph([("/$bunfs/root/chunk-crash.js", src)]))
+        self.assertEqual(report["bun_ant_members"], ["disableCrashReportUpload", "enableCrashReportUpload"])
+
     def test_accepts_the_2_1_302_interfaces(self):
         # getPlatform() reads platform:"linux" baked in by the bundler, so the
         # Windows and macOS branches below never run on Android. loginTty is
